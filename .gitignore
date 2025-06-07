@@ -1,0 +1,87 @@
+# Environment files
+.env
+.env.local
+.env.*.local
+
+# Secrets - NEVER commit these
+secrets/*
+!secrets/.gitignore
+!secrets/README.md
+
+# Data directories
+data/
+logs/
+tmp/
+temp/
+
+# Volume mounts
+postgres-data/
+redis-data/
+qdrant-data/
+*-data/
+
+# Certificates
+*.pem
+*.key
+*.crt
+*.csr
+letsencrypt/
+
+# Backups
+*.sql
+*.dump
+*.backup
+backups/
+
+# IDE files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+venv/
+env/
+ENV/
+.venv
+
+# Node
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Docker
+.docker/
+
+# Monitoring data
+prometheus/data/
+grafana/data/
+loki/data/
+
+# Model files (large)
+*.gguf
+*.bin
+*.safetensors
+models/
+
+# Temporary files
+*.tmp
+*.temp
+*.log
+*.pid
+
+# OS files
+Thumbs.db
+.Trashes
+
+# Custom
+.cache/
+.local/
