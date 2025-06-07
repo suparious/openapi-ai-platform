@@ -1,0 +1,98 @@
+# Base Docker Compose Configuration for Distributed AI Platform
+# This file defines the common network and core service configurations
+# Machine-specific services are defined in docker-compose.{machine}.yml files
+
+version: '3.8'
+
+# Networks for service communication
+networks:
+  ai-network:
+    driver: overlay
+    attachable: true
+    ipam:
+      config:
+        - subnet: 10.10.0.0/16
+
+  monitoring-network:
+    driver: overlay
+    attachable: true
+
+# Common volume definitions
+volumes:
+  postgres-data:
+    driver: local
+  redis-data:
+    driver: local
+  qdrant-data:
+    driver: local
+  grafana-data:
+    driver: local
+  prometheus-data:
+    driver: local
+
+# Extension fields for common configurations
+x-common-env: &common-env
+  TZ: ${TZ:-UTC}
+  LOG_LEVEL: ${LOG_LEVEL:-info}
+
+x-restart-policy: &restart-policy
+  restart: unless-stopped
+
+x-resource-limits: &resource-limits
+  deploy:
+    resources:
+      limits:
+        memory: ${DEFAULT_MEMORY_LIMIT:-4G}
+      reservations:
+        memory: ${DEFAULT_MEMORY_RESERVATION:-2G}
+
+# Common service templates
+x-healthcheck-http: &healthcheck-http
+  healthcheck:
+    test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost:${PORT:-8080}/health"]
+    interval: 30s
+    timeout: 10s
+    retries: 3
+    start_period: 40s
+
+# Base services that may be referenced by machine-specific configs
+services:
+  # Network time synchronization (optional but recommended)
+  ntp:
+    image: cturra/ntp:latest
+    container_name: ntp
+    <<: *restart-policy
+    networks:
+      - ai-network
+    ports:
+      - "123:123/udp"
+    environment:
+      <<: *common-env
+      NTP_SERVERS: "time.cloudflare.com,pool.ntp.org"
+    deploy:
+      placement:
+        constraints:
+          - node.labels.role == monitoring
+
+# Shared configuration snippets for machine-specific files
+# These are not services themselves but templates to be used with YAML anchors
+configs:
+  prometheus_config:
+    file: ./monitoring/prometheus.yml
+  grafana_dashboards:
+    file: ./monitoring/dashboards
+  litellm_config:
+    file: ./configs/litellm_config.yaml
+
+# Secrets management (using Docker secrets)
+secrets:
+  db_password:
+    file: ./secrets/db_password.txt
+  redis_password:
+    file: ./secrets/redis_password.txt
+  admin_password:
+    file: ./secrets/admin_password.txt
+  openai_api_key:
+    file: ./secrets/openai_api_key.txt
+  anthropic_api_key:
+    file: ./secrets/anthropic_api_key.txt

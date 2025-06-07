@@ -1,0 +1,327 @@
+# LiteLLM Configuration
+# Handles load balancing across multiple Ollama instances and external APIs
+
+model_list:
+  # Local Ollama Models - Load Balanced
+  - model_name: llama3.2
+    litellm_params:
+      model: ollama/llama3.2
+      api_base: http://ollama-orpheus:11434
+      stream: true
+      temperature: 0.7
+      max_tokens: 4096
+    model_info:
+      mode: completion
+      supports_function_calling: true
+      supports_vision: false
+      
+  - model_name: llama3.2
+    litellm_params:
+      model: ollama/llama3.2
+      api_base: http://kratos.local:11434
+      stream: true
+      temperature: 0.7
+      max_tokens: 4096
+    model_info:
+      mode: completion
+      supports_function_calling: true
+      supports_vision: false
+      
+  - model_name: llama3.2
+    litellm_params:
+      model: ollama/llama3.2
+      api_base: http://nyx.local:11434
+      stream: true
+      temperature: 0.7
+      max_tokens: 4096
+    model_info:
+      mode: completion
+      supports_function_calling: true
+      supports_vision: false
+
+  # Large Models - Hades (AMD GPU)
+  - model_name: llama3.1:70b
+    litellm_params:
+      model: ollama/llama3.1:70b
+      api_base: http://hades.local:11434
+      stream: true
+      temperature: 0.7
+      max_tokens: 8192
+      request_timeout: 600
+    model_info:
+      mode: completion
+      supports_function_calling: true
+      supports_vision: false
+      context_length: 131072
+      
+  - model_name: mixtral:8x7b
+    litellm_params:
+      model: ollama/mixtral:8x7b
+      api_base: http://hades.local:11434
+      stream: true
+      temperature: 0.7
+      max_tokens: 4096
+      request_timeout: 600
+    model_info:
+      mode: completion
+      supports_function_calling: true
+      supports_vision: false
+      
+  - model_name: qwen2.5:32b
+    litellm_params:
+      model: ollama/qwen2.5:32b
+      api_base: http://hades.local:11434
+      stream: true
+      temperature: 0.7
+      max_tokens: 8192
+      request_timeout: 600
+    model_info:
+      mode: completion
+      supports_function_calling: true
+      supports_vision: false
+
+  # Vision Models
+  - model_name: llava:13b
+    litellm_params:
+      model: ollama/llava:13b
+      api_base: http://orpheus.local:11434
+      stream: true
+      temperature: 0.7
+      max_tokens: 2048
+    model_info:
+      mode: completion
+      supports_function_calling: false
+      supports_vision: true
+      
+  - model_name: llava:34b
+    litellm_params:
+      model: ollama/llava:34b
+      api_base: http://hades.local:11434
+      stream: true
+      temperature: 0.7
+      max_tokens: 4096
+      request_timeout: 600
+    model_info:
+      mode: completion
+      supports_function_calling: false
+      supports_vision: true
+
+  # Code Models
+  - model_name: codellama:13b
+    litellm_params:
+      model: ollama/codellama:13b
+      api_base: http://kratos.local:11434
+      stream: true
+      temperature: 0.3
+      max_tokens: 4096
+    model_info:
+      mode: completion
+      supports_function_calling: true
+      supports_vision: false
+      
+  - model_name: deepseek-coder:33b
+    litellm_params:
+      model: ollama/deepseek-coder:33b
+      api_base: http://hades.local:11434
+      stream: true
+      temperature: 0.3
+      max_tokens: 8192
+      request_timeout: 600
+    model_info:
+      mode: completion
+      supports_function_calling: true
+      supports_vision: false
+
+  # Embedding Models
+  - model_name: nomic-embed-text
+    litellm_params:
+      model: ollama/nomic-embed-text
+      api_base: http://orpheus.local:11434
+    model_info:
+      mode: embedding
+      dimension: 768
+      
+  - model_name: mxbai-embed-large
+    litellm_params:
+      model: ollama/mxbai-embed-large
+      api_base: http://nyx.local:11434
+    model_info:
+      mode: embedding
+      dimension: 1024
+
+  # External APIs (when needed)
+  - model_name: gpt-4o
+    litellm_params:
+      model: openai/gpt-4o
+      api_key: os.environ/OPENAI_API_KEY
+      stream: true
+      temperature: 0.7
+      max_tokens: 4096
+    model_info:
+      mode: chat
+      supports_function_calling: true
+      supports_vision: true
+      
+  - model_name: claude-3-5-sonnet
+    litellm_params:
+      model: anthropic/claude-3-5-sonnet-20241022
+      api_key: os.environ/ANTHROPIC_API_KEY
+      stream: true
+      temperature: 0.7
+      max_tokens: 4096
+    model_info:
+      mode: chat
+      supports_function_calling: true
+      supports_vision: true
+      
+  - model_name: gemini-1.5-pro
+    litellm_params:
+      model: vertex_ai/gemini-1.5-pro
+      vertex_project: ${GOOGLE_PROJECT_ID}
+      vertex_location: us-central1
+      stream: true
+      temperature: 0.7
+      max_tokens: 8192
+    model_info:
+      mode: chat
+      supports_function_calling: true
+      supports_vision: true
+
+# Router Settings
+router_settings:
+  routing_strategy: usage-based-routing  # Least busy instance
+  allowed_fails: 3  # Failures before removing from rotation
+  cooldown_time: 60  # Seconds before retrying failed instance
+  enable_pre_call_checks: true  # Health check before routing
+  retry_after: 60  # Retry failed requests after X seconds
+  timeout: 600  # Global timeout in seconds
+  
+  # Model-specific settings
+  model_group_alias:
+    small_models: ["llama3.2", "codellama:13b"]
+    large_models: ["llama3.1:70b", "mixtral:8x7b", "qwen2.5:32b"]
+    vision_models: ["llava:13b", "llava:34b"]
+    code_models: ["codellama:13b", "deepseek-coder:33b"]
+    embedding_models: ["nomic-embed-text", "mxbai-embed-large"]
+    
+  # Fallback chains
+  fallbacks:
+    llama3.2: ["llama3.2", "gpt-4o"]  # Fallback to GPT-4 if all local fail
+    llama3.1:70b: ["llama3.1:70b", "claude-3-5-sonnet"]
+    codellama:13b: ["codellama:13b", "deepseek-coder:33b", "gpt-4o"]
+
+# General Settings
+general_settings:
+  # Logging
+  log_level: INFO
+  json_logs: true
+  log_to_file: true
+  log_file_path: /app/data/litellm.log
+  
+  # Database
+  database_url: os.environ/DATABASE_URL
+  database_connection_pool_size: 10
+  database_connection_timeout: 30
+  
+  # Redis Cache
+  redis_url: os.environ/REDIS_URL
+  cache_ttl: 3600
+  cache_namespace: litellm
+  
+  # Metrics
+  success_callback: ["prometheus"]
+  failure_callback: ["prometheus"]
+  service_callback: ["langfuse"]  # If using Langfuse
+  
+  # Security
+  master_key: os.environ/LITELLM_MASTER_KEY
+  custom_auth_header: X-API-Key
+  max_budget: 1000  # Max spend in USD
+  budget_duration: 30d
+  
+  # Performance
+  request_timeout: 600
+  stream_timeout: 600
+  max_parallel_requests: 100
+  connection_pool_size: 100
+  
+  # UI Settings
+  ui_access_mode: admin_only
+  ui_username: os.environ/UI_USERNAME
+  ui_password: os.environ/UI_PASSWORD
+
+# Load Balancing Rules
+load_balancing_rules:
+  # Prefer local models over external APIs
+  - rule: prefer_local
+    condition: 
+      model_type: ["local"]
+    weight: 10
+    
+  # Route large models to Hades
+  - rule: large_models_to_hades
+    condition:
+      model_size: [">30B"]
+      target_host: ["hades.local"]
+    weight: 20
+    
+  # Distribute small models across NVIDIA GPUs
+  - rule: small_models_distributed
+    condition:
+      model_size: ["<20B"]
+      target_host: ["orpheus.local", "kratos.local", "nyx.local"]
+    weight: 15
+    
+  # Keep embedding models on specific nodes
+  - rule: embeddings_dedicated
+    condition:
+      model_type: ["embedding"]
+      target_host: ["orpheus.local", "nyx.local"]
+    weight: 25
+
+# Health Check Configuration
+health_check_settings:
+  enabled: true
+  interval: 30  # seconds
+  timeout: 10   # seconds
+  failure_threshold: 3
+  success_threshold: 1
+  
+  # Custom health check endpoints
+  custom_health_endpoints:
+    ollama: "/api/tags"
+    openai: "/v1/models"
+    anthropic: "/v1/models"
+
+# Cost Tracking
+cost_tracking:
+  enable_cost_tracking: true
+  cost_per_token:
+    # Local models (electricity cost estimate)
+    llama3.2: 0.0001
+    llama3.1:70b: 0.001
+    mixtral:8x7b: 0.0008
+    # External APIs
+    gpt-4o: 0.03
+    claude-3-5-sonnet: 0.015
+    gemini-1.5-pro: 0.0125
+
+# Alerting Rules
+alerting:
+  - alert: HighErrorRate
+    expr: rate(litellm_request_errors[5m]) > 0.1
+    for: 5m
+    annotations:
+      summary: "High error rate on LiteLLM"
+      
+  - alert: ModelOffline
+    expr: up{model_name=~".*"} == 0
+    for: 2m
+    annotations:
+      summary: "Model {{ $labels.model_name }} is offline"
+      
+  - alert: HighLatency
+    expr: histogram_quantile(0.95, litellm_request_duration_seconds) > 30
+    for: 5m
+    annotations:
+      summary: "High latency on LiteLLM requests"

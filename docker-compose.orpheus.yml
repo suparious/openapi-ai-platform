@@ -1,0 +1,335 @@
+# Docker Compose Configuration for Orpheus
+# Primary application server - NVIDIA GPU machine (8 cores, 32GB RAM, 12GB VRAM)
+# Services: Open-WebUI, LiteLLM, Ollama
+
+version: '3.8'
+
+services:
+  # Open-WebUI - Primary user interface
+  open-webui:
+    image: ghcr.io/open-webui/open-webui:main
+    container_name: open-webui
+    restart: unless-stopped
+    hostname: open-webui.orpheus.local
+    networks:
+      - ai-network
+    ports:
+      - "3000:8080"
+    environment:
+      # Basic Configuration
+      WEBUI_NAME: ${WEBUI_NAME}
+      WEBUI_URL: http://orpheus.local:3000
+      WEBUI_SECRET_KEY: ${OPENWEBUI_SECRET_KEY}
+      
+      # Database Configuration
+      DATABASE_URL: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@erebus.local:5432/openwebui
+      
+      # Redis Configuration
+      REDIS_URL: redis://default:${REDIS_PASSWORD}@erebus.local:6379/0
+      
+      # Authentication
+      WEBUI_AUTH: ${WEBUI_AUTH:-true}
+      WEBUI_AUTH_TRUSTED_EMAIL_HEADER: ""
+      
+      # Model Configuration
+      OLLAMA_BASE_URLS: "http://litellm:4000"
+      OPENAI_API_BASE_URLS: "http://litellm:4000/v1"
+      OPENAI_API_KEYS: "${LITELLM_MASTER_KEY}"
+      
+      # Vector Database
+      VECTOR_DB: qdrant
+      QDRANT_URL: http://erebus.local:6333
+      QDRANT_API_KEY: ${QDRANT_API_KEY}
+      
+      # Features
+      ENABLE_RAG_WEB_SEARCH: true
+      RAG_WEB_SEARCH_ENGINE: "brave"
+      BRAVE_SEARCH_API_KEY: ${BRAVE_API_KEY}
+      
+      # Performance
+      CHUNKING_CHUNK_SIZE: 1500
+      CHUNKING_CHUNK_OVERLAP: 100
+      
+      # GPU Support
+      ENABLE_LITELLM_PROXY: true
+      ENABLE_OLLAMA_API: true
+      
+      # Logging
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+    volumes:
+      - open-webui-data:/app/backend/data
+      - ${NFS_SHARED_PATH}/uploads:/app/backend/uploads
+    depends_on:
+      - litellm
+    healthcheck:
+      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost:8080/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 60s
+    deploy:
+      resources:
+        limits:
+          memory: 8G
+          cpus: '4'
+        reservations:
+          memory: 4G
+          cpus: '2'
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+
+  # LiteLLM - Unified API proxy with load balancing
+  litellm:
+    image: ghcr.io/berriai/litellm:main-latest
+    container_name: litellm
+    restart: unless-stopped
+    hostname: litellm.orpheus.local
+    networks:
+      - ai-network
+    ports:
+      - "4000:4000"
+    environment:
+      # Master Configuration
+      LITELLM_MASTER_KEY: ${LITELLM_MASTER_KEY}
+      UI_USERNAME: admin
+      UI_PASSWORD: ${LITELLM_MASTER_KEY}
+      
+      # Database Configuration
+      DATABASE_URL: ${LITELLM_DATABASE_URL}
+      REDIS_URL: ${LITELLM_REDIS_URL}
+      
+      # API Keys
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      GOOGLE_API_KEY: ${GOOGLE_API_KEY:-}
+      GROQ_API_KEY: ${GROQ_API_KEY:-}
+      TOGETHER_API_KEY: ${TOGETHER_API_KEY:-}
+      
+      # Ollama Endpoints (Load Balanced)
+      OLLAMA_API_BASE: "http://ollama-orpheus:11434"
+      
+      # Features
+      LITELLM_MODE: PRODUCTION
+      STORE_MODEL_IN_DB: true
+      LITELLM_PROXY_BATCH_WRITE_AT: 10
+      DISABLE_SPEND_LOGS: false
+      
+      # Performance
+      LITELLM_REQUEST_TIMEOUT: 600
+      LITELLM_REDIS_CACHE_TTL: 600
+      
+      # Logging
+      LITELLM_LOG_LEVEL: ${LOG_LEVEL:-info}
+      LANGFUSE_PUBLIC_KEY: ${LANGFUSE_PUBLIC_KEY:-}
+      LANGFUSE_SECRET_KEY: ${LANGFUSE_SECRET_KEY:-}
+    volumes:
+      - ./configs/litellm_config.yaml:/app/config.yaml:ro
+      - litellm-data:/app/data
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:4000/health/liveliness"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
+    deploy:
+      resources:
+        limits:
+          memory: 4G
+          cpus: '2'
+        reservations:
+          memory: 2G
+          cpus: '1'
+
+  # Ollama - Local LLM inference (Orpheus instance)
+  ollama-orpheus:
+    image: ollama/ollama:latest
+    container_name: ollama-orpheus
+    restart: unless-stopped
+    hostname: ollama.orpheus.local
+    networks:
+      - ai-network
+    ports:
+      - "11434:11434"
+    environment:
+      OLLAMA_HOST: 0.0.0.0
+      OLLAMA_MODELS: /models
+      OLLAMA_KEEP_ALIVE: ${OLLAMA_KEEP_ALIVE:-30m}
+      OLLAMA_MAX_LOADED_MODELS: ${OLLAMA_MAX_LOADED_MODELS:-2}
+      OLLAMA_NUM_PARALLEL: ${OLLAMA_NUM_PARALLEL:-4}
+      OLLAMA_MAX_QUEUE: 512
+      OLLAMA_DEBUG: false
+      CUDA_VISIBLE_DEVICES: 0
+      NVIDIA_VISIBLE_DEVICES: all
+      NVIDIA_DRIVER_CAPABILITIES: compute,utility
+    volumes:
+      - ${NFS_MODELS_PATH}:/models:ro
+      - ollama-data:/root/.ollama
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:11434/api/tags"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 60s
+    deploy:
+      resources:
+        limits:
+          memory: 16G
+          cpus: '4'
+        reservations:
+          memory: 8G
+          cpus: '2'
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+
+  # Ollama Exporter for metrics
+  ollama-exporter:
+    image: ghcr.io/ricardbejarano/ollama_exporter:latest
+    container_name: ollama-exporter-orpheus
+    restart: unless-stopped
+    networks:
+      - ai-network
+      - monitoring-network
+    ports:
+      - "9888:9090"
+    environment:
+      OLLAMA_URL: http://ollama-orpheus:11434
+    depends_on:
+      - ollama-orpheus
+    deploy:
+      resources:
+        limits:
+          memory: 64M
+          cpus: '0.25'
+        reservations:
+          memory: 32M
+          cpus: '0.1'
+
+  # Pipelines - Open-WebUI Pipelines for function calling
+  pipelines:
+    image: ghcr.io/open-webui/pipelines:main
+    container_name: pipelines
+    restart: unless-stopped
+    hostname: pipelines.orpheus.local
+    networks:
+      - ai-network
+    ports:
+      - "9099:9099"
+    environment:
+      PIPELINES_DIR: /app/pipelines
+      PIPELINES_ENV: production
+      # OpenAI configuration for pipelines that need it
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      OPENAI_API_BASE: "http://litellm:4000/v1"
+    volumes:
+      - pipelines-data:/app/pipelines
+      - ${NFS_SHARED_PATH}/pipelines:/app/pipelines/custom:ro
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9099/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
+    deploy:
+      resources:
+        limits:
+          memory: 2G
+          cpus: '1'
+        reservations:
+          memory: 1G
+          cpus: '0.5'
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+
+  # Node Exporter
+  node-exporter:
+    image: prom/node-exporter:latest
+    container_name: node-exporter-orpheus
+    restart: unless-stopped
+    hostname: node-exporter.orpheus.local
+    networks:
+      - ai-network
+      - monitoring-network
+    ports:
+      - "9100:9100"
+    volumes:
+      - /proc:/host/proc:ro
+      - /sys:/host/sys:ro
+      - /:/rootfs:ro
+    command:
+      - '--path.procfs=/host/proc'
+      - '--path.sysfs=/host/sys'
+      - '--path.rootfs=/rootfs'
+      - '--collector.filesystem.mount-points-exclude=^/(sys|proc|dev|host|etc)($$|/)'
+      - '--collector.netclass.ignored-devices=^(veth.*|docker.*|br-.*)$$'
+    deploy:
+      resources:
+        limits:
+          memory: 128M
+          cpus: '0.5'
+        reservations:
+          memory: 64M
+          cpus: '0.1'
+
+  # NVIDIA GPU Exporter
+  nvidia-gpu-exporter:
+    image: utkuozdemir/nvidia_gpu_exporter:latest
+    container_name: nvidia-gpu-exporter-orpheus
+    restart: unless-stopped
+    networks:
+      - ai-network
+      - monitoring-network
+    ports:
+      - "9835:9835"
+    environment:
+      NVIDIA_VISIBLE_DEVICES: all
+      NVIDIA_DRIVER_CAPABILITIES: utility
+    deploy:
+      resources:
+        limits:
+          memory: 64M
+          cpus: '0.25'
+        reservations:
+          memory: 32M
+          cpus: '0.1'
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+
+networks:
+  ai-network:
+    external: true
+  monitoring-network:
+    external: true
+
+volumes:
+  open-webui-data:
+    driver: local
+    driver_opts:
+      type: none
+      o: bind
+      device: ${DATA_DIR}/open-webui
+  litellm-data:
+    driver: local
+    driver_opts:
+      type: none
+      o: bind
+      device: ${DATA_DIR}/litellm
+  ollama-data:
+    driver: local
+    driver_opts:
+      type: none
+      o: bind
+      device: ${DATA_DIR}/ollama-orpheus
+  pipelines-data:
+    driver: local
+    driver_opts:
+      type: none
+      o: bind
+      device: ${DATA_DIR}/pipelines

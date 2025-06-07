@@ -1,0 +1,275 @@
+# Prometheus Configuration
+# Collects metrics from all services across the distributed platform
+
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+  scrape_timeout: 10s
+  
+  # External labels for federation
+  external_labels:
+    cluster: 'ai-platform'
+    environment: 'production'
+
+# Alertmanager configuration
+alerting:
+  alertmanagers:
+    - static_configs:
+        - targets:
+            - 'moros.local:9093'
+
+# Load rules files
+rule_files:
+  - '/etc/prometheus/rules/*.yml'
+
+# Scrape configurations
+scrape_configs:
+  # Prometheus self-monitoring
+  - job_name: 'prometheus'
+    static_configs:
+      - targets: ['localhost:9090']
+
+  # Node Exporters - System metrics
+  - job_name: 'node'
+    static_configs:
+      - targets:
+          - 'erebus.local:9100'
+          - 'thanatos.local:9100'
+          - 'zelus.local:9100'
+          - 'orpheus.local:9100'
+          - 'kratos.local:9100'
+          - 'nyx.local:9100'
+          - 'hades.local:9100'
+          - 'hephaestus.local:9100'
+          - 'moros.local:9100'
+        labels:
+          group: 'infrastructure'
+
+  # PostgreSQL Exporter
+  - job_name: 'postgresql'
+    static_configs:
+      - targets:
+          - 'erebus.local:9187'
+        labels:
+          instance: 'primary'
+      - targets:
+          - 'thanatos.local:9187'
+        labels:
+          instance: 'replica'
+
+  # Redis Exporter
+  - job_name: 'redis'
+    static_configs:
+      - targets:
+          - 'erebus.local:9121'
+        labels:
+          instance: 'primary'
+
+  # Qdrant Vector Database
+  - job_name: 'qdrant'
+    metrics_path: '/metrics'
+    static_configs:
+      - targets:
+          - 'erebus.local:6333'
+
+  # Ollama Instances
+  - job_name: 'ollama'
+    metrics_path: '/metrics'
+    static_configs:
+      - targets:
+          - 'orpheus.local:9888'
+        labels:
+          instance: 'orpheus'
+          gpu_type: 'nvidia'
+      - targets:
+          - 'kratos.local:9888'
+        labels:
+          instance: 'kratos'
+          gpu_type: 'nvidia'
+      - targets:
+          - 'nyx.local:9888'
+        labels:
+          instance: 'nyx'
+          gpu_type: 'nvidia'
+      - targets:
+          - 'hades.local:9888'
+        labels:
+          instance: 'hades'
+          gpu_type: 'amd'
+
+  # GPU Exporters
+  - job_name: 'nvidia_gpu'
+    static_configs:
+      - targets:
+          - 'orpheus.local:9835'
+          - 'kratos.local:9835'
+          - 'nyx.local:9835'
+
+  - job_name: 'amd_gpu'
+    static_configs:
+      - targets:
+          - 'hades.local:9835'
+
+  # LiteLLM
+  - job_name: 'litellm'
+    metrics_path: '/metrics'
+    static_configs:
+      - targets:
+          - 'orpheus.local:4000'
+
+  # Open-WebUI
+  - job_name: 'openwebui'
+    metrics_path: '/metrics'
+    static_configs:
+      - targets:
+          - 'orpheus.local:3000'
+
+  # Traefik
+  - job_name: 'traefik'
+    static_configs:
+      - targets:
+          - 'hephaestus.local:8082'
+
+  # Service Registry
+  - job_name: 'service_registry'
+    metrics_path: '/metrics'
+    static_configs:
+      - targets:
+          - 'hephaestus.local:8090'
+
+  # Uptime Kuma (if it exposes metrics)
+  - job_name: 'uptime_kuma'
+    metrics_path: '/metrics'
+    static_configs:
+      - targets:
+          - 'hephaestus.local:3001'
+
+  # OpenAPI Servers
+  - job_name: 'openapi_servers'
+    static_configs:
+      # Local workstation servers
+      - targets:
+          - 'workstation.local:8001'
+        labels:
+          service: 'filesystem'
+          location: 'local'
+      - targets:
+          - 'workstation.local:8002'
+        labels:
+          service: 'git'
+          location: 'local'
+      - targets:
+          - 'workstation.local:8004'
+        labels:
+          service: 'time'
+          location: 'local'
+      - targets:
+          - 'workstation.local:8005'
+        labels:
+          service: 'get_user_info'
+          location: 'local'
+      - targets:
+          - 'workstation.local:8006'
+        labels:
+          service: 'fetch'
+          location: 'local'
+      # Thanatos servers
+      - targets:
+          - 'thanatos.local:8021'
+        labels:
+          service: 'sequentialthinking'
+          location: 'thanatos'
+      - targets:
+          - 'thanatos.local:8022'
+        labels:
+          service: 'memory'
+          location: 'thanatos'
+      - targets:
+          - 'thanatos.local:8023'
+        labels:
+          service: 'context7'
+          location: 'thanatos'
+      - targets:
+          - 'thanatos.local:8024'
+        labels:
+          service: 'calculator'
+          location: 'thanatos'
+      # Zelus servers
+      - targets:
+          - 'zelus.local:8031'
+        labels:
+          service: 'brave_web_search'
+          location: 'zelus'
+      - targets:
+          - 'zelus.local:8032'
+        labels:
+          service: 'weather'
+          location: 'zelus'
+      - targets:
+          - 'zelus.local:8033'
+        labels:
+          service: 'graphiti'
+          location: 'zelus'
+      - targets:
+          - 'zelus.local:8034'
+        labels:
+          service: 'sql'
+          location: 'zelus'
+
+  # Blackbox Exporter - HTTP endpoint monitoring
+  - job_name: 'blackbox_http'
+    metrics_path: /probe
+    params:
+      module: [http_2xx]
+    static_configs:
+      - targets:
+          - 'http://orpheus.local:3000/health'
+          - 'http://orpheus.local:4000/health'
+          - 'http://hephaestus.local:8090/health'
+          - 'http://erebus.local:6333/health'
+          - 'http://orpheus.local:11434/api/tags'
+          - 'http://kratos.local:11434/api/tags'
+          - 'http://nyx.local:11434/api/tags'
+          - 'http://hades.local:11434/api/tags'
+    relabel_configs:
+      - source_labels: [__address__]
+        target_label: __param_target
+      - source_labels: [__param_target]
+        target_label: instance
+      - target_label: __address__
+        replacement: hephaestus.local:9115
+
+  # Docker containers (via cAdvisor if deployed)
+  - job_name: 'docker'
+    static_configs:
+      - targets:
+          - 'erebus.local:8080'
+          - 'thanatos.local:8080'
+          - 'zelus.local:8080'
+          - 'orpheus.local:8080'
+          - 'kratos.local:8080'
+          - 'nyx.local:8080'
+          - 'hades.local:8080'
+          - 'hephaestus.local:8080'
+          - 'moros.local:8080'
+
+# Service discovery for dynamic environments (optional)
+# Uncomment if using Consul or similar
+# - job_name: 'consul'
+#   consul_sd_configs:
+#     - server: 'consul.local:8500'
+#   relabel_configs:
+#     - source_labels: [__meta_consul_service]
+#       target_label: job
+
+# Remote write configuration (optional)
+# For long-term storage or federation
+# remote_write:
+#   - url: "http://remote-prometheus:9090/api/v1/write"
+#     queue_config:
+#       max_samples_per_send: 10000
+#       batch_send_deadline: 5s
+
+# Remote read configuration (optional)
+# remote_read:
+#   - url: "http://remote-prometheus:9090/api/v1/read"

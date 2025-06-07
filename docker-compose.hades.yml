@@ -1,0 +1,234 @@
+# Docker Compose Configuration for Hades
+# Heavy GPU inference server - AMD GPU machine (24 cores, 128GB RAM, 2x24GB VRAM)
+# Services: Ollama (primary for large models)
+
+version: '3.8'
+
+services:
+  # Ollama - Local LLM inference (Hades instance - AMD GPU)
+  ollama-hades:
+    image: ollama/ollama:rocm
+    container_name: ollama-hades
+    restart: unless-stopped
+    hostname: ollama.hades.local
+    networks:
+      - ai-network
+    ports:
+      - "11434:11434"
+    environment:
+      OLLAMA_HOST: 0.0.0.0
+      OLLAMA_MODELS: /models
+      OLLAMA_KEEP_ALIVE: ${OLLAMA_KEEP_ALIVE:-30m}
+      OLLAMA_MAX_LOADED_MODELS: 4  # Can handle more with 128GB RAM
+      OLLAMA_NUM_PARALLEL: 8  # Higher parallelism with more cores
+      OLLAMA_MAX_QUEUE: 1024
+      OLLAMA_DEBUG: false
+      # AMD GPU specific
+      HSA_OVERRIDE_GFX_VERSION: ${AMD_GFX_VERSION:-10.3.0}  # Adjust based on your GPU
+      ROCR_VISIBLE_DEVICES: 0,1  # Both GPUs
+      GPU_DEVICE_ORDINAL: 0,1
+      # Performance tuning for large models
+      OLLAMA_NUM_GPU: 2
+      OLLAMA_GPU_OVERHEAD: 1073741824  # 1GB overhead
+      OLLAMA_CUDA_MEMORY_FRACTION: 0.95  # Use 95% of VRAM
+    volumes:
+      - ${NFS_MODELS_PATH}:/models:ro
+      - ollama-data:/root/.ollama
+      - /dev/kfd:/dev/kfd  # AMD KFD interface
+      - /dev/dri:/dev/dri  # Direct Rendering Interface
+    devices:
+      - /dev/kfd
+      - /dev/dri
+    group_add:
+      - video
+      - render
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:11434/api/tags"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 120s  # Longer start time for large models
+    deploy:
+      resources:
+        limits:
+          memory: 96G  # Leave some for system
+          cpus: '20'
+        reservations:
+          memory: 64G
+          cpus: '16'
+    security_opt:
+      - seccomp:unconfined
+    cap_add:
+      - SYS_PTRACE
+
+  # Ollama Exporter for metrics
+  ollama-exporter:
+    image: ghcr.io/ricardbejarano/ollama_exporter:latest
+    container_name: ollama-exporter-hades
+    restart: unless-stopped
+    networks:
+      - ai-network
+      - monitoring-network
+    ports:
+      - "9888:9090"
+    environment:
+      OLLAMA_URL: http://ollama-hades:11434
+      EXPORT_INTERVAL: 30s
+    depends_on:
+      - ollama-hades
+    deploy:
+      resources:
+        limits:
+          memory: 128M
+          cpus: '0.5'
+        reservations:
+          memory: 64M
+          cpus: '0.25'
+
+  # Model loader service - Pre-loads popular models
+  model-loader:
+    image: ollama/ollama:rocm
+    container_name: model-loader-hades
+    restart: "no"  # Run once
+    networks:
+      - ai-network
+    environment:
+      OLLAMA_HOST: ollama-hades:11434
+    volumes:
+      - ./scripts/load-models.sh:/load-models.sh:ro
+      - ${NFS_MODELS_PATH}:/models:ro
+    entrypoint: ["/bin/bash", "/load-models.sh"]
+    depends_on:
+      ollama-hades:
+        condition: service_healthy
+    deploy:
+      resources:
+        limits:
+          memory: 16G
+          cpus: '4'
+        reservations:
+          memory: 8G
+          cpus: '2'
+
+  # AMD GPU Exporter (using custom solution since nvidia-smi won't work)
+  amd-gpu-exporter:
+    image: flightlessmango/gpu-monitor:latest
+    container_name: amd-gpu-exporter-hades
+    restart: unless-stopped
+    networks:
+      - ai-network
+      - monitoring-network
+    ports:
+      - "9835:9835"
+    environment:
+      GPU_EXPORTER_TELEMETRY_PATH: /metrics
+      GPU_EXPORTER_PORT: 9835
+    volumes:
+      - /sys/class/drm:/sys/class/drm:ro
+      - /dev/dri:/dev/dri:ro
+    devices:
+      - /dev/dri
+    group_add:
+      - video
+      - render
+    deploy:
+      resources:
+        limits:
+          memory: 128M
+          cpus: '0.5'
+        reservations:
+          memory: 64M
+          cpus: '0.25'
+
+  # Node Exporter with extended metrics for high-end system
+  node-exporter:
+    image: prom/node-exporter:latest
+    container_name: node-exporter-hades
+    restart: unless-stopped
+    hostname: node-exporter.hades.local
+    networks:
+      - ai-network
+      - monitoring-network
+    ports:
+      - "9100:9100"
+    volumes:
+      - /proc:/host/proc:ro
+      - /sys:/host/sys:ro
+      - /:/rootfs:ro
+    command:
+      - '--path.procfs=/host/proc'
+      - '--path.sysfs=/host/sys'
+      - '--path.rootfs=/rootfs'
+      - '--collector.filesystem.mount-points-exclude=^/(sys|proc|dev|host|etc)($$|/)'
+      - '--collector.netclass.ignored-devices=^(veth.*|docker.*|br-.*)$$'
+      - '--collector.cpu.info'
+      - '--collector.diskstats.device-exclude=^(ram|loop|fd|(h|s|v)d[a-z]|nvme\\d+n\\d+p)\\d+$$'
+      - '--collector.processes'
+      - '--collector.systemd'
+      - '--collector.tcpstat'
+    deploy:
+      resources:
+        limits:
+          memory: 256M
+          cpus: '0.5'
+        reservations:
+          memory: 128M
+          cpus: '0.25'
+
+  # Performance monitoring for high-end system
+  netdata:
+    image: netdata/netdata:latest
+    container_name: netdata-hades
+    restart: unless-stopped
+    hostname: netdata.hades.local
+    networks:
+      - ai-network
+      - monitoring-network
+    ports:
+      - "19999:19999"
+    cap_add:
+      - SYS_PTRACE
+    security_opt:
+      - apparmor:unconfined
+    volumes:
+      - netdata-config:/etc/netdata
+      - netdata-lib:/var/lib/netdata
+      - netdata-cache:/var/cache/netdata
+      - /etc/passwd:/host/etc/passwd:ro
+      - /etc/group:/host/etc/group:ro
+      - /proc:/host/proc:ro
+      - /sys:/host/sys:ro
+      - /etc/os-release:/host/etc/os-release:ro
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    environment:
+      NETDATA_CLAIM_TOKEN: ${NETDATA_CLAIM_TOKEN:-}
+      NETDATA_CLAIM_URL: ${NETDATA_CLAIM_URL:-}
+      NETDATA_CLAIM_ROOMS: ${NETDATA_CLAIM_ROOMS:-}
+    deploy:
+      resources:
+        limits:
+          memory: 2G
+          cpus: '2'
+        reservations:
+          memory: 1G
+          cpus: '1'
+
+networks:
+  ai-network:
+    external: true
+  monitoring-network:
+    external: true
+
+volumes:
+  ollama-data:
+    driver: local
+    driver_opts:
+      type: none
+      o: bind
+      device: ${DATA_DIR}/ollama-hades
+  netdata-config:
+    driver: local
+  netdata-lib:
+    driver: local
+  netdata-cache:
+    driver: local

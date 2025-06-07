@@ -1,0 +1,357 @@
+# Docker Compose Configuration for Local Workstation
+# Local development machine - Variable specs
+# Services: Local-only OpenAPI servers (filesystem, git, docker, etc.)
+
+version: '3.8'
+
+services:
+  # Filesystem OpenAPI Server
+  openapi-filesystem:
+    build:
+      context: ${OPENAPI_SERVERS_PATH:-/home/shaun/repos/openapi-servers}/servers/filesystem
+      dockerfile: Dockerfile
+    container_name: openapi-filesystem
+    restart: unless-stopped
+    networks:
+      - ai-network
+    ports:
+      - "8001:8000"
+    environment:
+      # Security: Define allowed paths
+      ALLOWED_DIRECTORIES: "/workspace,/shared"
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+      CORS_ORIGINS: ${CORS_ORIGINS}
+    volumes:
+      # Mount local directories that should be accessible
+      - ${HOME}/workspace:/workspace
+      - ${NFS_SHARED_PATH}:/shared
+      - ${HOME}/.gitconfig:/home/user/.gitconfig:ro
+      - ${HOME}/.ssh:/home/user/.ssh:ro
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+          cpus: '1'
+        reservations:
+          memory: 256M
+          cpus: '0.5'
+
+  # Git OpenAPI Server
+  openapi-git:
+    build:
+      context: ${OPENAPI_SERVERS_PATH:-/home/shaun/repos/openapi-servers}/servers/git
+      dockerfile: Dockerfile
+    container_name: openapi-git
+    restart: unless-stopped
+    networks:
+      - ai-network
+    ports:
+      - "8002:8000"
+    environment:
+      GIT_WORKSPACE: /workspace
+      GIT_USER_NAME: ${GIT_USER_NAME:-AI Assistant}
+      GIT_USER_EMAIL: ${GIT_USER_EMAIL:-ai@local}
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+      CORS_ORIGINS: ${CORS_ORIGINS}
+    volumes:
+      - ${HOME}/workspace:/workspace
+      - ${HOME}/.gitconfig:/home/user/.gitconfig:ro
+      - ${HOME}/.ssh:/home/user/.ssh:ro
+      - ${SSH_AUTH_SOCK}:${SSH_AUTH_SOCK}  # SSH agent forwarding
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+          cpus: '1'
+        reservations:
+          memory: 256M
+          cpus: '0.5'
+
+  # Docker OpenAPI Server (if implemented)
+  openapi-docker:
+    build:
+      context: ${OPENAPI_SERVERS_PATH:-/home/shaun/repos/openapi-servers}/servers/docker
+      dockerfile: Dockerfile
+    container_name: openapi-docker
+    restart: unless-stopped
+    networks:
+      - ai-network
+    ports:
+      - "8003:8000"
+    environment:
+      DOCKER_HOST: unix:///var/run/docker.sock
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+      CORS_ORIGINS: ${CORS_ORIGINS}
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - ${HOME}/.docker:/root/.docker:ro
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+    deploy:
+      resources:
+        limits:
+          memory: 256M
+          cpus: '0.5'
+        reservations:
+          memory: 128M
+          cpus: '0.25'
+
+  # Time OpenAPI Server
+  openapi-time:
+    build:
+      context: ${OPENAPI_SERVERS_PATH:-/home/shaun/repos/openapi-servers}/servers/time
+      dockerfile: Dockerfile
+    container_name: openapi-time
+    restart: unless-stopped
+    networks:
+      - ai-network
+    ports:
+      - "8004:8000"
+    environment:
+      TZ: ${TZ:-America/New_York}
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+      CORS_ORIGINS: ${CORS_ORIGINS}
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+    deploy:
+      resources:
+        limits:
+          memory: 128M
+          cpus: '0.25'
+        reservations:
+          memory: 64M
+          cpus: '0.1'
+
+  # Get User Info OpenAPI Server
+  openapi-get-user-info:
+    build:
+      context: ${OPENAPI_SERVERS_PATH:-/home/shaun/repos/openapi-servers}/servers/get-user-info
+      dockerfile: Dockerfile
+    container_name: openapi-get-user-info
+    restart: unless-stopped
+    networks:
+      - ai-network
+    ports:
+      - "8005:8000"
+    environment:
+      USER_NAME: ${USER_NAME:-User}
+      USER_EMAIL: ${USER_EMAIL:-user@example.com}
+      USER_LOCATION: ${USER_LOCATION:-Local}
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+      CORS_ORIGINS: ${CORS_ORIGINS}
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+    deploy:
+      resources:
+        limits:
+          memory: 128M
+          cpus: '0.25'
+        reservations:
+          memory: 64M
+          cpus: '0.1'
+
+  # Fetch OpenAPI Server (web fetching)
+  openapi-fetch:
+    build:
+      context: ${OPENAPI_SERVERS_PATH:-/home/shaun/repos/openapi-servers}/servers/fetch
+      dockerfile: Dockerfile
+    container_name: openapi-fetch
+    restart: unless-stopped
+    networks:
+      - ai-network
+    ports:
+      - "8006:8000"
+    environment:
+      USER_AGENT: ${USER_AGENT:-Mozilla/5.0 (AI Assistant)}
+      TIMEOUT: 30
+      MAX_REDIRECTS: 5
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+      CORS_ORIGINS: ${CORS_ORIGINS}
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+          cpus: '1'
+        reservations:
+          memory: 256M
+          cpus: '0.5'
+
+  # MCP Proxy - Bridge MCP servers to OpenAPI
+  mcp-proxy:
+    build:
+      context: ${OPENAPI_SERVERS_PATH:-/home/shaun/repos/openapi-servers}/servers/mcp-proxy
+      dockerfile: Dockerfile
+    container_name: mcp-proxy
+    restart: unless-stopped
+    networks:
+      - ai-network
+    ports:
+      - "8010:8000"  # Base port for proxy
+    environment:
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+      CORS_ORIGINS: ${CORS_ORIGINS}
+    volumes:
+      # Mount any required MCP server configurations
+      - ./configs/mcp:/app/mcp-configs:ro
+      - ${HOME}/.config/mcp:/home/user/.config/mcp:ro
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+    deploy:
+      resources:
+        limits:
+          memory: 256M
+          cpus: '0.5'
+        reservations:
+          memory: 128M
+          cpus: '0.25'
+
+  # Sequential Thinking OpenAPI Server (Local instance for development)
+  openapi-sequentialthinking-local:
+    build:
+      context: ./openapi-servers/sequentialthinking
+      dockerfile: Dockerfile
+    container_name: openapi-sequentialthinking-local
+    restart: unless-stopped
+    networks:
+      - ai-network
+    ports:
+      - "8020:8000"
+    environment:
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+      CORS_ORIGINS: ${CORS_ORIGINS}
+      MAX_THOUGHTS: 50
+      TIMEOUT_SECONDS: 300
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+          cpus: '1'
+        reservations:
+          memory: 256M
+          cpus: '0.5'
+
+  # Local Ollama instance (optional for development)
+  ollama-local:
+    image: ollama/ollama:latest
+    container_name: ollama-local
+    restart: unless-stopped
+    networks:
+      - ai-network
+    ports:
+      - "11435:11434"  # Different port to avoid conflicts
+    environment:
+      OLLAMA_HOST: 0.0.0.0
+      OLLAMA_MODELS: ${HOME}/.ollama/models
+      OLLAMA_KEEP_ALIVE: 5m  # Shorter for development
+      OLLAMA_MAX_LOADED_MODELS: 1
+      OLLAMA_NUM_PARALLEL: 2
+    volumes:
+      - ${HOME}/.ollama:/root/.ollama
+    profiles:
+      - dev  # Only run when explicitly requested
+    deploy:
+      resources:
+        limits:
+          memory: 8G
+          cpus: '4'
+        reservations:
+          memory: 4G
+          cpus: '2'
+    runtime: nvidia  # If NVIDIA GPU available
+
+  # Service registrar - Register local services
+  service-registrar:
+    build:
+      context: ./service-registrar
+      dockerfile: Dockerfile
+    container_name: service-registrar-local
+    restart: "no"  # Run once on startup
+    networks:
+      - ai-network
+    environment:
+      REGISTRY_URL: http://hephaestus.local:8090
+      API_KEY: ${SERVICE_REGISTRY_API_KEY}
+      SERVICES: |
+        [
+          {
+            "name": "openapi-filesystem",
+            "host": "workstation.local",
+            "port": 8001,
+            "path": "/",
+            "health_check_url": "http://workstation.local:8001/health",
+            "tags": ["openapi", "filesystem", "local"]
+          },
+          {
+            "name": "openapi-git",
+            "host": "workstation.local", 
+            "port": 8002,
+            "path": "/",
+            "health_check_url": "http://workstation.local:8002/health",
+            "tags": ["openapi", "git", "local"]
+          },
+          {
+            "name": "openapi-time",
+            "host": "workstation.local",
+            "port": 8004,
+            "path": "/",
+            "health_check_url": "http://workstation.local:8004/health",
+            "tags": ["openapi", "time", "local"]
+          }
+        ]
+    depends_on:
+      - openapi-filesystem
+      - openapi-git
+      - openapi-time
+    deploy:
+      resources:
+        limits:
+          memory: 64M
+          cpus: '0.25'
+
+networks:
+  ai-network:
+    external: true
+
+# Local volumes use default driver (no bind mounts needed)
+volumes:
+  ollama-local-data:

@@ -1,0 +1,334 @@
+# Docker Compose Configuration for Thanatos
+# Secondary services server - CPU only machine (8 cores, 32GB RAM)
+# Services: PostgreSQL replica, OpenAPI servers (sequentialthinking, memory, context7, calculator)
+
+version: '3.8'
+
+services:
+  # PostgreSQL - Replica database
+  postgres-replica:
+    image: postgres:16-alpine
+    container_name: postgres-replica
+    restart: unless-stopped
+    hostname: postgres.thanatos.local
+    networks:
+      - ai-network
+    ports:
+      - "5432:5432"
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
+      # Replication settings
+      POSTGRES_REPLICATION_MODE: slave
+      POSTGRES_MASTER_HOST: erebus.local
+      POSTGRES_MASTER_PORT: 5432
+      POSTGRES_REPLICATION_USER: replicator
+      POSTGRES_REPLICATION_PASSWORD: ${POSTGRES_REPLICATION_PASSWORD:-replicator_password}
+    volumes:
+      - postgres-replica-data:/var/lib/postgresql/data
+      - ./configs/postgres/postgresql-replica.conf:/etc/postgresql/postgresql.conf:ro
+    command: >
+      postgres
+      -c config_file=/etc/postgresql/postgresql.conf
+      -c max_connections=200
+      -c shared_buffers=4GB
+      -c effective_cache_size=12GB
+      -c work_mem=20MB
+      -c maintenance_work_mem=1GB
+      -c hot_standby=on
+      -c max_standby_archive_delay=30s
+      -c max_standby_streaming_delay=30s
+      -c wal_receiver_status_interval=10s
+      -c hot_standby_feedback=on
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 60s
+    deploy:
+      resources:
+        limits:
+          memory: 8G
+          cpus: '4'
+        reservations:
+          memory: 4G
+          cpus: '2'
+
+  # Sequential Thinking OpenAPI Server
+  openapi-sequentialthinking:
+    build:
+      context: ./openapi-servers/sequentialthinking
+      dockerfile: Dockerfile
+    container_name: openapi-sequentialthinking
+    restart: unless-stopped
+    hostname: sequentialthinking.thanatos.local
+    networks:
+      - ai-network
+    ports:
+      - "8021:8000"
+    environment:
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+      CORS_ORIGINS: ${CORS_ORIGINS}
+      MAX_THOUGHTS: 100
+      TIMEOUT_SECONDS: 600
+      REDIS_URL: redis://default:${REDIS_PASSWORD}@erebus.local:6379/2
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+    deploy:
+      resources:
+        limits:
+          memory: 2G
+          cpus: '2'
+        reservations:
+          memory: 1G
+          cpus: '1'
+
+  # Memory OpenAPI Server
+  openapi-memory:
+    build:
+      context: ${OPENAPI_SERVERS_PATH:-/home/shaun/repos/openapi-servers}/servers/memory
+      dockerfile: Dockerfile
+    container_name: openapi-memory
+    restart: unless-stopped
+    hostname: memory.thanatos.local
+    networks:
+      - ai-network
+    ports:
+      - "8022:8000"
+    environment:
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+      CORS_ORIGINS: ${CORS_ORIGINS}
+      DATABASE_URL: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres-replica:5432/memory
+      REDIS_URL: redis://default:${REDIS_PASSWORD}@erebus.local:6379/3
+      MAX_MEMORY_SIZE: 1000000  # Max size per memory in bytes
+      RETENTION_DAYS: 90
+    volumes:
+      - memory-data:/app/data
+    depends_on:
+      - postgres-replica
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+    deploy:
+      resources:
+        limits:
+          memory: 2G
+          cpus: '1'
+        reservations:
+          memory: 1G
+          cpus: '0.5'
+
+  # Context7 OpenAPI Server
+  openapi-context7:
+    build:
+      context: ./openapi-servers/context7
+      dockerfile: Dockerfile
+    container_name: openapi-context7
+    restart: unless-stopped
+    hostname: context7.thanatos.local
+    networks:
+      - ai-network
+    ports:
+      - "8023:8000"
+    environment:
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+      CORS_ORIGINS: ${CORS_ORIGINS}
+      CONTEXT7_API_KEY: ${CONTEXT7_API_KEY:-}
+      CACHE_TTL: 3600
+      MAX_TOKENS: 10000
+    volumes:
+      - context7-cache:/app/cache
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+    deploy:
+      resources:
+        limits:
+          memory: 1G
+          cpus: '1'
+        reservations:
+          memory: 512M
+          cpus: '0.5'
+
+  # Calculator OpenAPI Server
+  openapi-calculator:
+    build:
+      context: ./openapi-servers/calculator
+      dockerfile: Dockerfile
+    container_name: openapi-calculator
+    restart: unless-stopped
+    hostname: calculator.thanatos.local
+    networks:
+      - ai-network
+    ports:
+      - "8024:8000"
+    environment:
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+      CORS_ORIGINS: ${CORS_ORIGINS}
+      MAX_CALCULATION_TIME: 30  # seconds
+      ENABLE_SYMBOLIC: true
+      PRECISION: 50  # decimal places
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+          cpus: '1'
+        reservations:
+          memory: 256M
+          cpus: '0.5'
+
+  # PostgreSQL Exporter for replica metrics
+  postgres-exporter:
+    image: prometheuscommunity/postgres-exporter:latest
+    container_name: postgres-exporter-thanatos
+    restart: unless-stopped
+    networks:
+      - ai-network
+      - monitoring-network
+    ports:
+      - "9187:9187"
+    environment:
+      DATA_SOURCE_NAME: "postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres-replica:5432/${POSTGRES_DB}?sslmode=disable"
+      PG_EXPORTER_AUTO_DISCOVER_DATABASES: true
+      PG_EXPORTER_EXCLUDE_DATABASES: "template0,template1"
+    depends_on:
+      postgres-replica:
+        condition: service_healthy
+    deploy:
+      resources:
+        limits:
+          memory: 128M
+          cpus: '0.5'
+        reservations:
+          memory: 64M
+          cpus: '0.1'
+
+  # Node Exporter
+  node-exporter:
+    image: prom/node-exporter:latest
+    container_name: node-exporter-thanatos
+    restart: unless-stopped
+    hostname: node-exporter.thanatos.local
+    networks:
+      - ai-network
+      - monitoring-network
+    ports:
+      - "9100:9100"
+    volumes:
+      - /proc:/host/proc:ro
+      - /sys:/host/sys:ro
+      - /:/rootfs:ro
+    command:
+      - '--path.procfs=/host/proc'
+      - '--path.sysfs=/host/sys'
+      - '--path.rootfs=/rootfs'
+      - '--collector.filesystem.mount-points-exclude=^/(sys|proc|dev|host|etc)($$|/)'
+      - '--collector.netclass.ignored-devices=^(veth.*|docker.*|br-.*)$$'
+    deploy:
+      resources:
+        limits:
+          memory: 128M
+          cpus: '0.5'
+        reservations:
+          memory: 64M
+          cpus: '0.1'
+
+  # Service registrar
+  service-registrar:
+    build:
+      context: ./service-registrar
+      dockerfile: Dockerfile
+    container_name: service-registrar-thanatos
+    restart: "no"
+    networks:
+      - ai-network
+    environment:
+      REGISTRY_URL: http://hephaestus.local:8090
+      API_KEY: ${SERVICE_REGISTRY_API_KEY}
+      SERVICES: |
+        [
+          {
+            "name": "postgres-replica",
+            "host": "thanatos.local",
+            "port": 5432,
+            "health_check_url": "tcp://thanatos.local:5432",
+            "tags": ["database", "postgresql", "replica"]
+          },
+          {
+            "name": "openapi-sequentialthinking",
+            "host": "thanatos.local",
+            "port": 8021,
+            "health_check_url": "http://thanatos.local:8021/health",
+            "tags": ["openapi", "tool", "thinking"]
+          },
+          {
+            "name": "openapi-memory",
+            "host": "thanatos.local",
+            "port": 8022,
+            "health_check_url": "http://thanatos.local:8022/health",
+            "tags": ["openapi", "tool", "memory"]
+          },
+          {
+            "name": "openapi-context7",
+            "host": "thanatos.local",
+            "port": 8023,
+            "health_check_url": "http://thanatos.local:8023/health",
+            "tags": ["openapi", "tool", "documentation"]
+          },
+          {
+            "name": "openapi-calculator",
+            "host": "thanatos.local",
+            "port": 8024,
+            "health_check_url": "http://thanatos.local:8024/health",
+            "tags": ["openapi", "tool", "math"]
+          }
+        ]
+    depends_on:
+      - openapi-sequentialthinking
+      - openapi-memory
+      - openapi-context7
+      - openapi-calculator
+
+networks:
+  ai-network:
+    external: true
+  monitoring-network:
+    external: true
+
+volumes:
+  postgres-replica-data:
+    driver: local
+    driver_opts:
+      type: none
+      o: bind
+      device: ${DATA_DIR}/postgres-replica
+  memory-data:
+    driver: local
+    driver_opts:
+      type: none
+      o: bind
+      device: ${DATA_DIR}/memory
+  context7-cache:
+    driver: local
+    driver_opts:
+      type: none
+      o: bind
+      device: ${DATA_DIR}/context7-cache

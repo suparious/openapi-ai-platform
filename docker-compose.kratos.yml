@@ -1,0 +1,265 @@
+# Docker Compose Configuration for Kratos
+# NVIDIA GPU inference server (8 cores, 32GB RAM, 12GB VRAM)
+# Services: Ollama instance, Automatic1111
+
+version: '3.8'
+
+services:
+  # Ollama - Local LLM inference (Kratos instance)
+  ollama-kratos:
+    image: ollama/ollama:latest
+    container_name: ollama-kratos
+    restart: unless-stopped
+    hostname: ollama.kratos.local
+    networks:
+      - ai-network
+    ports:
+      - "11434:11434"
+    environment:
+      OLLAMA_HOST: 0.0.0.0
+      OLLAMA_MODELS: /models
+      OLLAMA_KEEP_ALIVE: ${OLLAMA_KEEP_ALIVE:-30m}
+      OLLAMA_MAX_LOADED_MODELS: ${OLLAMA_MAX_LOADED_MODELS:-2}
+      OLLAMA_NUM_PARALLEL: ${OLLAMA_NUM_PARALLEL:-4}
+      OLLAMA_MAX_QUEUE: 512
+      OLLAMA_DEBUG: false
+      CUDA_VISIBLE_DEVICES: 0
+      NVIDIA_VISIBLE_DEVICES: all
+      NVIDIA_DRIVER_CAPABILITIES: compute,utility
+    volumes:
+      - ${NFS_MODELS_PATH}:/models:ro
+      - ollama-data:/root/.ollama
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:11434/api/tags"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 60s
+    deploy:
+      resources:
+        limits:
+          memory: 16G
+          cpus: '4'
+        reservations:
+          memory: 8G
+          cpus: '2'
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+
+  # Automatic1111 - Stable Diffusion WebUI
+  automatic1111:
+    image: ghcr.io/absurdlyobfuscated/automatic1111:latest
+    container_name: automatic1111
+    restart: unless-stopped
+    hostname: sd.kratos.local
+    networks:
+      - ai-network
+    ports:
+      - "7860:7860"
+      - "7861:7861"  # API port
+    environment:
+      CLI_ARGS: |
+        --api
+        --api-auth ${SD_API_KEY:-default_key}
+        --listen
+        --enable-insecure-extension-access
+        --xformers
+        --medvram
+        --theme dark
+        --gradio-auth ${SD_USERNAME:-admin}:${SD_PASSWORD:-password}
+      NVIDIA_VISIBLE_DEVICES: all
+      NVIDIA_DRIVER_CAPABILITIES: compute,utility
+    volumes:
+      - ${NFS_SHARED_PATH}/stable-diffusion/models:/app/stable-diffusion-webui/models
+      - ${NFS_SHARED_PATH}/stable-diffusion/outputs:/app/stable-diffusion-webui/outputs
+      - sd-data:/app/stable-diffusion-webui
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:7860/"]
+      interval: 60s
+      timeout: 30s
+      retries: 5
+      start_period: 300s  # SD takes time to start
+    deploy:
+      resources:
+        limits:
+          memory: 12G
+          cpus: '4'
+        reservations:
+          memory: 8G
+          cpus: '2'
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+
+  # ComfyUI - Alternative SD interface (optional)
+  comfyui:
+    image: ghcr.io/ai-dock/comfyui:latest
+    container_name: comfyui
+    restart: unless-stopped
+    hostname: comfy.kratos.local
+    networks:
+      - ai-network
+    ports:
+      - "8188:8188"
+    environment:
+      NVIDIA_VISIBLE_DEVICES: all
+      NVIDIA_DRIVER_CAPABILITIES: compute,utility
+    volumes:
+      - ${NFS_SHARED_PATH}/comfyui/models:/workspace/ComfyUI/models
+      - ${NFS_SHARED_PATH}/comfyui/output:/workspace/ComfyUI/output
+      - comfyui-data:/workspace
+    profiles:
+      - image-gen  # Only start when explicitly requested
+    deploy:
+      resources:
+        limits:
+          memory: 8G
+          cpus: '2'
+        reservations:
+          memory: 4G
+          cpus: '1'
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+
+  # Ollama Exporter for metrics
+  ollama-exporter:
+    image: ghcr.io/ricardbejarano/ollama_exporter:latest
+    container_name: ollama-exporter-kratos
+    restart: unless-stopped
+    networks:
+      - ai-network
+      - monitoring-network
+    ports:
+      - "9888:9090"
+    environment:
+      OLLAMA_URL: http://ollama-kratos:11434
+    depends_on:
+      - ollama-kratos
+    deploy:
+      resources:
+        limits:
+          memory: 64M
+          cpus: '0.25'
+        reservations:
+          memory: 32M
+          cpus: '0.1'
+
+  # NVIDIA GPU Exporter
+  nvidia-gpu-exporter:
+    image: utkuozdemir/nvidia_gpu_exporter:latest
+    container_name: nvidia-gpu-exporter-kratos
+    restart: unless-stopped
+    networks:
+      - ai-network
+      - monitoring-network
+    ports:
+      - "9835:9835"
+    environment:
+      NVIDIA_VISIBLE_DEVICES: all
+      NVIDIA_DRIVER_CAPABILITIES: utility
+    deploy:
+      resources:
+        limits:
+          memory: 64M
+          cpus: '0.25'
+        reservations:
+          memory: 32M
+          cpus: '0.1'
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+
+  # Node Exporter
+  node-exporter:
+    image: prom/node-exporter:latest
+    container_name: node-exporter-kratos
+    restart: unless-stopped
+    hostname: node-exporter.kratos.local
+    networks:
+      - ai-network
+      - monitoring-network
+    ports:
+      - "9100:9100"
+    volumes:
+      - /proc:/host/proc:ro
+      - /sys:/host/sys:ro
+      - /:/rootfs:ro
+    command:
+      - '--path.procfs=/host/proc'
+      - '--path.sysfs=/host/sys'
+      - '--path.rootfs=/rootfs'
+      - '--collector.filesystem.mount-points-exclude=^/(sys|proc|dev|host|etc)($$|/)'
+      - '--collector.netclass.ignored-devices=^(veth.*|docker.*|br-.*)$$'
+    deploy:
+      resources:
+        limits:
+          memory: 128M
+          cpus: '0.5'
+        reservations:
+          memory: 64M
+          cpus: '0.1'
+
+  # Service registrar
+  service-registrar:
+    build:
+      context: ./service-registrar
+      dockerfile: Dockerfile
+    container_name: service-registrar-kratos
+    restart: "no"
+    networks:
+      - ai-network
+    environment:
+      REGISTRY_URL: http://hephaestus.local:8090
+      API_KEY: ${SERVICE_REGISTRY_API_KEY}
+      SERVICES: |
+        [
+          {
+            "name": "ollama-kratos",
+            "host": "kratos.local",
+            "port": 11434,
+            "health_check_url": "http://kratos.local:11434/api/tags",
+            "tags": ["ollama", "llm", "gpu", "nvidia"]
+          },
+          {
+            "name": "automatic1111",
+            "host": "kratos.local",
+            "port": 7860,
+            "health_check_url": "http://kratos.local:7860/",
+            "tags": ["image", "stable-diffusion", "gpu"]
+          }
+        ]
+    depends_on:
+      - ollama-kratos
+      - automatic1111
+
+networks:
+  ai-network:
+    external: true
+  monitoring-network:
+    external: true
+
+volumes:
+  ollama-data:
+    driver: local
+    driver_opts:
+      type: none
+      o: bind
+      device: ${DATA_DIR}/ollama-kratos
+  sd-data:
+    driver: local
+    driver_opts:
+      type: none
+      o: bind
+      device: ${DATA_DIR}/stable-diffusion
+  comfyui-data:
+    driver: local
+    driver_opts:
+      type: none
+      o: bind
+      device: ${DATA_DIR}/comfyui

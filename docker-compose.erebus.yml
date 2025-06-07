@@ -1,0 +1,275 @@
+# Docker Compose Configuration for Erebus
+# Primary database server - CPU only machine (8 cores, 32GB RAM)
+# Services: PostgreSQL, Redis, Qdrant
+
+version: '3.8'
+
+services:
+  # PostgreSQL - Primary database
+  postgres:
+    image: postgres:16-alpine
+    container_name: postgres-primary
+    restart: unless-stopped
+    hostname: postgres.erebus.local
+    networks:
+      - ai-network
+    ports:
+      - "5432:5432"
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
+      POSTGRES_INITDB_ARGS: "--encoding=UTF8 --locale=en_US.UTF-8"
+      POSTGRES_HOST_AUTH_METHOD: "scram-sha-256"
+      # Replication settings
+      POSTGRES_REPLICATION_MODE: master
+      POSTGRES_REPLICATION_USER: replicator
+      POSTGRES_REPLICATION_PASSWORD: ${POSTGRES_REPLICATION_PASSWORD:-replicator_password}
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+      - ./configs/postgres/postgresql.conf:/etc/postgresql/postgresql.conf:ro
+      - ./configs/postgres/pg_hba.conf:/etc/postgresql/pg_hba.conf:ro
+      - ${DATA_DIR}/postgres-backups:/backups
+    command: >
+      postgres
+      -c config_file=/etc/postgresql/postgresql.conf
+      -c hba_file=/etc/postgresql/pg_hba.conf
+      -c max_connections=200
+      -c shared_buffers=4GB
+      -c effective_cache_size=12GB
+      -c work_mem=20MB
+      -c maintenance_work_mem=1GB
+      -c wal_level=replica
+      -c max_wal_senders=3
+      -c wal_keep_size=1GB
+      -c archive_mode=on
+      -c archive_command='test ! -f /backups/%f && cp %p /backups/%f'
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 60s
+    deploy:
+      resources:
+        limits:
+          memory: 8G
+          cpus: '4'
+        reservations:
+          memory: 4G
+          cpus: '2'
+
+  # Redis - Caching and session management
+  redis:
+    image: redis:7-alpine
+    container_name: redis-primary
+    restart: unless-stopped
+    hostname: redis.erebus.local
+    networks:
+      - ai-network
+    ports:
+      - "6379:6379"
+    environment:
+      REDIS_PASSWORD: ${REDIS_PASSWORD}
+    volumes:
+      - redis-data:/data
+      - ./configs/redis/redis.conf:/etc/redis/redis.conf:ro
+    command: >
+      redis-server /etc/redis/redis.conf
+      --requirepass ${REDIS_PASSWORD}
+      --maxmemory 4gb
+      --maxmemory-policy allkeys-lru
+      --appendonly yes
+      --appendfsync everysec
+      --save 900 1
+      --save 300 10
+      --save 60 10000
+    healthcheck:
+      test: ["CMD", "redis-cli", "--pass", "${REDIS_PASSWORD}", "ping"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
+    deploy:
+      resources:
+        limits:
+          memory: 4G
+          cpus: '2'
+        reservations:
+          memory: 2G
+          cpus: '1'
+
+  # Qdrant - Vector database for embeddings
+  qdrant:
+    image: qdrant/qdrant:latest
+    container_name: qdrant
+    restart: unless-stopped
+    hostname: qdrant.erebus.local
+    networks:
+      - ai-network
+    ports:
+      - "6333:6333"
+      - "6334:6334"  # gRPC port
+    environment:
+      QDRANT__SERVICE__API_KEY: ${QDRANT_API_KEY}
+      QDRANT__SERVICE__GRPC_PORT: 6334
+      QDRANT__SERVICE__HTTP_PORT: 6333
+      QDRANT__LOG_LEVEL: INFO
+      QDRANT__STORAGE__STORAGE_PATH: /qdrant/storage
+      QDRANT__STORAGE__SNAPSHOTS_PATH: /qdrant/snapshots
+      QDRANT__SERVICE__ENABLE_TLS: false
+      QDRANT__COLLECTION__ON_DISK_PAYLOAD: true
+      QDRANT__STORAGE__PERFORMANCE__OPTIMIZERS__MEMMAP_THRESHOLD_KB: 20000
+    volumes:
+      - qdrant-data:/qdrant/storage
+      - ${DATA_DIR}/qdrant-snapshots:/qdrant/snapshots
+    healthcheck:
+      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost:6333/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
+    deploy:
+      resources:
+        limits:
+          memory: 8G
+          cpus: '2'
+        reservations:
+          memory: 4G
+          cpus: '1'
+
+  # Node Exporter for system metrics
+  node-exporter:
+    image: prom/node-exporter:latest
+    container_name: node-exporter-erebus
+    restart: unless-stopped
+    hostname: node-exporter.erebus.local
+    networks:
+      - ai-network
+      - monitoring-network
+    ports:
+      - "9100:9100"
+    volumes:
+      - /proc:/host/proc:ro
+      - /sys:/host/sys:ro
+      - /:/rootfs:ro
+    command:
+      - '--path.procfs=/host/proc'
+      - '--path.sysfs=/host/sys'
+      - '--path.rootfs=/rootfs'
+      - '--collector.filesystem.mount-points-exclude=^/(sys|proc|dev|host|etc)($$|/)'
+      - '--collector.netclass.ignored-devices=^(veth.*|docker.*|br-.*)$$'
+    deploy:
+      resources:
+        limits:
+          memory: 128M
+          cpus: '0.5'
+        reservations:
+          memory: 64M
+          cpus: '0.1'
+
+  # PostgreSQL Exporter for database metrics
+  postgres-exporter:
+    image: prometheuscommunity/postgres-exporter:latest
+    container_name: postgres-exporter
+    restart: unless-stopped
+    networks:
+      - ai-network
+      - monitoring-network
+    ports:
+      - "9187:9187"
+    environment:
+      DATA_SOURCE_NAME: "postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}?sslmode=disable"
+      PG_EXPORTER_AUTO_DISCOVER_DATABASES: true
+      PG_EXPORTER_EXCLUDE_DATABASES: "template0,template1"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    deploy:
+      resources:
+        limits:
+          memory: 128M
+          cpus: '0.5'
+        reservations:
+          memory: 64M
+          cpus: '0.1'
+
+  # Redis Exporter for cache metrics
+  redis-exporter:
+    image: oliver006/redis_exporter:latest
+    container_name: redis-exporter
+    restart: unless-stopped
+    networks:
+      - ai-network
+      - monitoring-network
+    ports:
+      - "9121:9121"
+    environment:
+      REDIS_ADDR: "redis://redis:6379"
+      REDIS_PASSWORD: ${REDIS_PASSWORD}
+    depends_on:
+      redis:
+        condition: service_healthy
+    deploy:
+      resources:
+        limits:
+          memory: 64M
+          cpus: '0.25'
+        reservations:
+          memory: 32M
+          cpus: '0.1'
+
+  # Backup service for databases
+  db-backup:
+    image: postgres:16-alpine
+    container_name: db-backup
+    restart: unless-stopped
+    networks:
+      - ai-network
+    environment:
+      PGUSER: ${POSTGRES_USER}
+      PGPASSWORD: ${POSTGRES_PASSWORD}
+      PGHOST: postgres
+      PGDATABASE: ${POSTGRES_DB}
+    volumes:
+      - ${DATA_DIR}/postgres-backups:/backups
+      - ./scripts/backup-postgres.sh:/backup.sh:ro
+    entrypoint: ["/bin/sh"]
+    command: ["-c", "while true; do /backup.sh; sleep 86400; done"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+          cpus: '0.5'
+        reservations:
+          memory: 256M
+          cpus: '0.25'
+
+networks:
+  ai-network:
+    external: true
+  monitoring-network:
+    external: true
+
+volumes:
+  postgres-data:
+    driver: local
+    driver_opts:
+      type: none
+      o: bind
+      device: ${DATA_DIR}/postgres
+  redis-data:
+    driver: local
+    driver_opts:
+      type: none
+      o: bind
+      device: ${DATA_DIR}/redis
+  qdrant-data:
+    driver: local
+    driver_opts:
+      type: none
+      o: bind
+      device: ${DATA_DIR}/qdrant

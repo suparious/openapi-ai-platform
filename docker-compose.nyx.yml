@@ -1,0 +1,329 @@
+# Docker Compose Configuration for Nyx
+# NVIDIA GPU inference server (8 cores, 32GB RAM, 12GB VRAM)
+# Services: Ollama instance, Pipelines server
+
+version: '3.8'
+
+services:
+  # Ollama - Local LLM inference (Nyx instance)
+  ollama-nyx:
+    image: ollama/ollama:latest
+    container_name: ollama-nyx
+    restart: unless-stopped
+    hostname: ollama.nyx.local
+    networks:
+      - ai-network
+    ports:
+      - "11434:11434"
+    environment:
+      OLLAMA_HOST: 0.0.0.0
+      OLLAMA_MODELS: /models
+      OLLAMA_KEEP_ALIVE: ${OLLAMA_KEEP_ALIVE:-30m}
+      OLLAMA_MAX_LOADED_MODELS: ${OLLAMA_MAX_LOADED_MODELS:-2}
+      OLLAMA_NUM_PARALLEL: ${OLLAMA_NUM_PARALLEL:-4}
+      OLLAMA_MAX_QUEUE: 512
+      OLLAMA_DEBUG: false
+      CUDA_VISIBLE_DEVICES: 0
+      NVIDIA_VISIBLE_DEVICES: all
+      NVIDIA_DRIVER_CAPABILITIES: compute,utility
+    volumes:
+      - ${NFS_MODELS_PATH}:/models:ro
+      - ollama-data:/root/.ollama
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:11434/api/tags"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 60s
+    deploy:
+      resources:
+        limits:
+          memory: 16G
+          cpus: '4'
+        reservations:
+          memory: 8G
+          cpus: '2'
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+
+  # Text Generation WebUI (oobabooga)
+  text-generation-webui:
+    image: ghcr.io/oobabooga/text-generation-webui:latest
+    container_name: text-generation-webui
+    restart: unless-stopped
+    hostname: textgen.nyx.local
+    networks:
+      - ai-network
+    ports:
+      - "7860:7860"  # WebUI
+      - "5000:5000"   # API
+    environment:
+      CLI_ARGS: |
+        --api
+        --listen
+        --extensions openai
+        --model-dir /models
+        --lora-dir /loras
+        --verbose
+      NVIDIA_VISIBLE_DEVICES: all
+      NVIDIA_DRIVER_CAPABILITIES: compute,utility
+    volumes:
+      - ${NFS_MODELS_PATH}:/models:ro
+      - ${NFS_SHARED_PATH}/loras:/loras:ro
+      - textgen-data:/app/text-generation-webui
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:7860/"]
+      interval: 60s
+      timeout: 30s
+      retries: 5
+      start_period: 120s
+    deploy:
+      resources:
+        limits:
+          memory: 14G
+          cpus: '4'
+        reservations:
+          memory: 8G
+          cpus: '2'
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+
+  # Whisper API - Speech to text
+  whisper-api:
+    image: ghcr.io/ahmetoner/whisper-asr-webservice:latest
+    container_name: whisper-api
+    restart: unless-stopped
+    hostname: whisper.nyx.local
+    networks:
+      - ai-network
+    ports:
+      - "9000:9000"
+    environment:
+      ASR_MODEL: medium.en
+      ASR_ENGINE: openai_whisper
+      NVIDIA_VISIBLE_DEVICES: all
+      NVIDIA_DRIVER_CAPABILITIES: compute,utility
+    volumes:
+      - whisper-models:/app/models
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/healthcheck"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 60s
+    deploy:
+      resources:
+        limits:
+          memory: 4G
+          cpus: '2'
+        reservations:
+          memory: 2G
+          cpus: '1'
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+
+  # Embeddings Server
+  embeddings-server:
+    build:
+      context: ./embeddings-server
+      dockerfile: Dockerfile
+    container_name: embeddings-server
+    restart: unless-stopped
+    hostname: embeddings.nyx.local
+    networks:
+      - ai-network
+    ports:
+      - "8050:8000"
+    environment:
+      MODEL_NAME: ${EMBEDDINGS_MODEL:-sentence-transformers/all-MiniLM-L6-v2}
+      MAX_LENGTH: 512
+      BATCH_SIZE: 32
+      DEVICE: cuda
+      NVIDIA_VISIBLE_DEVICES: all
+      NVIDIA_DRIVER_CAPABILITIES: compute,utility
+    volumes:
+      - embeddings-cache:/app/cache
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 60s
+    deploy:
+      resources:
+        limits:
+          memory: 4G
+          cpus: '2'
+        reservations:
+          memory: 2G
+          cpus: '1'
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+
+  # Ollama Exporter for metrics
+  ollama-exporter:
+    image: ghcr.io/ricardbejarano/ollama_exporter:latest
+    container_name: ollama-exporter-nyx
+    restart: unless-stopped
+    networks:
+      - ai-network
+      - monitoring-network
+    ports:
+      - "9888:9090"
+    environment:
+      OLLAMA_URL: http://ollama-nyx:11434
+    depends_on:
+      - ollama-nyx
+    deploy:
+      resources:
+        limits:
+          memory: 64M
+          cpus: '0.25'
+        reservations:
+          memory: 32M
+          cpus: '0.1'
+
+  # NVIDIA GPU Exporter
+  nvidia-gpu-exporter:
+    image: utkuozdemir/nvidia_gpu_exporter:latest
+    container_name: nvidia-gpu-exporter-nyx
+    restart: unless-stopped
+    networks:
+      - ai-network
+      - monitoring-network
+    ports:
+      - "9835:9835"
+    environment:
+      NVIDIA_VISIBLE_DEVICES: all
+      NVIDIA_DRIVER_CAPABILITIES: utility
+    deploy:
+      resources:
+        limits:
+          memory: 64M
+          cpus: '0.25'
+        reservations:
+          memory: 32M
+          cpus: '0.1'
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+
+  # Node Exporter
+  node-exporter:
+    image: prom/node-exporter:latest
+    container_name: node-exporter-nyx
+    restart: unless-stopped
+    hostname: node-exporter.nyx.local
+    networks:
+      - ai-network
+      - monitoring-network
+    ports:
+      - "9100:9100"
+    volumes:
+      - /proc:/host/proc:ro
+      - /sys:/host/sys:ro
+      - /:/rootfs:ro
+    command:
+      - '--path.procfs=/host/proc'
+      - '--path.sysfs=/host/sys'
+      - '--path.rootfs=/rootfs'
+      - '--collector.filesystem.mount-points-exclude=^/(sys|proc|dev|host|etc)($$|/)'
+      - '--collector.netclass.ignored-devices=^(veth.*|docker.*|br-.*)$$'
+    deploy:
+      resources:
+        limits:
+          memory: 128M
+          cpus: '0.5'
+        reservations:
+          memory: 64M
+          cpus: '0.1'
+
+  # Service registrar
+  service-registrar:
+    build:
+      context: ./service-registrar
+      dockerfile: Dockerfile
+    container_name: service-registrar-nyx
+    restart: "no"
+    networks:
+      - ai-network
+    environment:
+      REGISTRY_URL: http://hephaestus.local:8090
+      API_KEY: ${SERVICE_REGISTRY_API_KEY}
+      SERVICES: |
+        [
+          {
+            "name": "ollama-nyx",
+            "host": "nyx.local",
+            "port": 11434,
+            "health_check_url": "http://nyx.local:11434/api/tags",
+            "tags": ["ollama", "llm", "gpu", "nvidia"]
+          },
+          {
+            "name": "text-generation-webui",
+            "host": "nyx.local",
+            "port": 7860,
+            "health_check_url": "http://nyx.local:7860/",
+            "tags": ["text-generation", "llm", "gpu"]
+          },
+          {
+            "name": "whisper-api",
+            "host": "nyx.local",
+            "port": 9000,
+            "health_check_url": "http://nyx.local:9000/healthcheck",
+            "tags": ["speech-to-text", "whisper", "gpu"]
+          },
+          {
+            "name": "embeddings-server",
+            "host": "nyx.local",
+            "port": 8050,
+            "health_check_url": "http://nyx.local:8050/health",
+            "tags": ["embeddings", "vector", "gpu"]
+          }
+        ]
+    depends_on:
+      - ollama-nyx
+      - text-generation-webui
+      - whisper-api
+      - embeddings-server
+
+networks:
+  ai-network:
+    external: true
+  monitoring-network:
+    external: true
+
+volumes:
+  ollama-data:
+    driver: local
+    driver_opts:
+      type: none
+      o: bind
+      device: ${DATA_DIR}/ollama-nyx
+  textgen-data:
+    driver: local
+    driver_opts:
+      type: none
+      o: bind
+      device: ${DATA_DIR}/text-generation-webui
+  whisper-models:
+    driver: local
+    driver_opts:
+      type: none
+      o: bind
+      device: ${DATA_DIR}/whisper-models
+  embeddings-cache:
+    driver: local
+    driver_opts:
+      type: none
+      o: bind
+      device: ${DATA_DIR}/embeddings-cache

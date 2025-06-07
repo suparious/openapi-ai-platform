@@ -1,0 +1,356 @@
+# Docker Compose Configuration for Moros
+# Monitoring server - Small machine (6 cores, 8GB RAM)
+# Services: Grafana, Prometheus, Loki, Alertmanager
+
+version: '3.8'
+
+services:
+  # Prometheus - Metrics collection
+  prometheus:
+    image: prom/prometheus:latest
+    container_name: prometheus
+    restart: unless-stopped
+    hostname: prometheus.moros.local
+    networks:
+      - ai-network
+      - monitoring-network
+    ports:
+      - "9090:9090"
+    environment:
+      TZ: ${TZ:-UTC}
+    volumes:
+      - prometheus-data:/prometheus
+      - ./monitoring/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ./monitoring/rules:/etc/prometheus/rules:ro
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+      - '--storage.tsdb.retention.time=${PROMETHEUS_RETENTION:-30d}'
+      - '--storage.tsdb.retention.size=10GB'
+      - '--web.console.libraries=/etc/prometheus/console_libraries'
+      - '--web.console.templates=/etc/prometheus/consoles'
+      - '--web.enable-lifecycle'
+      - '--web.enable-admin-api'
+    healthcheck:
+      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost:9090/-/healthy"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
+    deploy:
+      resources:
+        limits:
+          memory: 2G
+          cpus: '2'
+        reservations:
+          memory: 1G
+          cpus: '1'
+
+  # Grafana - Visualization
+  grafana:
+    image: grafana/grafana:latest
+    container_name: grafana
+    restart: unless-stopped
+    hostname: grafana.moros.local
+    networks:
+      - ai-network
+      - monitoring-network
+    ports:
+      - "3001:3000"
+    environment:
+      GF_SECURITY_ADMIN_USER: ${GF_SECURITY_ADMIN_USER}
+      GF_SECURITY_ADMIN_PASSWORD: ${GF_SECURITY_ADMIN_PASSWORD}
+      GF_SERVER_ROOT_URL: ${GF_SERVER_ROOT_URL}
+      GF_INSTALL_PLUGINS: grafana-clock-panel,grafana-simple-json-datasource,grafana-piechart-panel
+      GF_AUTH_ANONYMOUS_ENABLED: false
+      GF_AUTH_ANONYMOUS_ORG_ROLE: Viewer
+      GF_ANALYTICS_REPORTING_ENABLED: false
+      GF_LOG_MODE: console
+      GF_LOG_LEVEL: info
+      GF_ALERTING_ENABLED: true
+      GF_UNIFIED_ALERTING_ENABLED: true
+    volumes:
+      - grafana-data:/var/lib/grafana
+      - ./monitoring/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./monitoring/grafana/dashboards:/var/lib/grafana/dashboards:ro
+    depends_on:
+      - prometheus
+      - loki
+    healthcheck:
+      test: ["CMD-SHELL", "wget --quiet --tries=1 --spider http://localhost:3000/api/health || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 60s
+    deploy:
+      resources:
+        limits:
+          memory: 1G
+          cpus: '1'
+        reservations:
+          memory: 512M
+          cpus: '0.5'
+
+  # Loki - Log aggregation
+  loki:
+    image: grafana/loki:latest
+    container_name: loki
+    restart: unless-stopped
+    hostname: loki.moros.local
+    networks:
+      - ai-network
+      - monitoring-network
+    ports:
+      - "3100:3100"
+    environment:
+      TZ: ${TZ:-UTC}
+    volumes:
+      - loki-data:/loki
+      - ./monitoring/loki/loki-config.yml:/etc/loki/local-config.yaml:ro
+    command: -config.file=/etc/loki/local-config.yaml
+    healthcheck:
+      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost:3100/ready"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
+    deploy:
+      resources:
+        limits:
+          memory: 1G
+          cpus: '1'
+        reservations:
+          memory: 512M
+          cpus: '0.5'
+
+  # Promtail - Log collector
+  promtail:
+    image: grafana/promtail:latest
+    container_name: promtail
+    restart: unless-stopped
+    hostname: promtail.moros.local
+    networks:
+      - ai-network
+      - monitoring-network
+    volumes:
+      - /var/log:/var/log:ro
+      - /var/lib/docker/containers:/var/lib/docker/containers:ro
+      - ./monitoring/promtail/promtail-config.yml:/etc/promtail/config.yml:ro
+      - promtail-positions:/positions
+    command: -config.file=/etc/promtail/config.yml
+    depends_on:
+      - loki
+    deploy:
+      resources:
+        limits:
+          memory: 256M
+          cpus: '0.5'
+        reservations:
+          memory: 128M
+          cpus: '0.25'
+
+  # Alertmanager - Alert routing
+  alertmanager:
+    image: prom/alertmanager:latest
+    container_name: alertmanager
+    restart: unless-stopped
+    hostname: alertmanager.moros.local
+    networks:
+      - ai-network
+      - monitoring-network
+    ports:
+      - "9093:9093"
+    volumes:
+      - alertmanager-data:/alertmanager
+      - ./monitoring/alertmanager/alertmanager.yml:/etc/alertmanager/alertmanager.yml:ro
+    command:
+      - '--config.file=/etc/alertmanager/alertmanager.yml'
+      - '--storage.path=/alertmanager'
+      - '--cluster.advertise-address=0.0.0.0:9093'
+    healthcheck:
+      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost:9093/-/healthy"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
+    deploy:
+      resources:
+        limits:
+          memory: 256M
+          cpus: '0.5'
+        reservations:
+          memory: 128M
+          cpus: '0.25'
+
+  # Pushgateway - For batch job metrics
+  pushgateway:
+    image: prom/pushgateway:latest
+    container_name: pushgateway
+    restart: unless-stopped
+    hostname: pushgateway.moros.local
+    networks:
+      - ai-network
+      - monitoring-network
+    ports:
+      - "9091:9091"
+    healthcheck:
+      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost:9091/-/healthy"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
+    deploy:
+      resources:
+        limits:
+          memory: 128M
+          cpus: '0.25'
+        reservations:
+          memory: 64M
+          cpus: '0.1'
+
+  # Grafana Tempo - Distributed tracing (optional)
+  tempo:
+    image: grafana/tempo:latest
+    container_name: tempo
+    restart: unless-stopped
+    hostname: tempo.moros.local
+    networks:
+      - ai-network
+      - monitoring-network
+    ports:
+      - "3200:3200"   # Tempo
+      - "4317:4317"   # OTLP gRPC
+      - "4318:4318"   # OTLP HTTP
+    volumes:
+      - tempo-data:/var/tempo
+      - ./monitoring/tempo/tempo-config.yml:/etc/tempo/config.yml:ro
+    command: ["-config.file=/etc/tempo/config.yml"]
+    profiles:
+      - tracing  # Only start when explicitly requested
+    deploy:
+      resources:
+        limits:
+          memory: 1G
+          cpus: '1'
+        reservations:
+          memory: 512M
+          cpus: '0.5'
+
+  # Node Exporter
+  node-exporter:
+    image: prom/node-exporter:latest
+    container_name: node-exporter-moros
+    restart: unless-stopped
+    hostname: node-exporter.moros.local
+    networks:
+      - ai-network
+      - monitoring-network
+    ports:
+      - "9100:9100"
+    volumes:
+      - /proc:/host/proc:ro
+      - /sys:/host/sys:ro
+      - /:/rootfs:ro
+    command:
+      - '--path.procfs=/host/proc'
+      - '--path.sysfs=/host/sys'
+      - '--path.rootfs=/rootfs'
+      - '--collector.filesystem.mount-points-exclude=^/(sys|proc|dev|host|etc)($$|/)'
+      - '--collector.netclass.ignored-devices=^(veth.*|docker.*|br-.*)$$'
+    deploy:
+      resources:
+        limits:
+          memory: 128M
+          cpus: '0.5'
+        reservations:
+          memory: 64M
+          cpus: '0.1'
+
+  # Service registrar
+  service-registrar:
+    build:
+      context: ./service-registrar
+      dockerfile: Dockerfile
+    container_name: service-registrar-moros
+    restart: "no"
+    networks:
+      - ai-network
+    environment:
+      REGISTRY_URL: http://hephaestus.local:8090
+      API_KEY: ${SERVICE_REGISTRY_API_KEY}
+      SERVICES: |
+        [
+          {
+            "name": "prometheus",
+            "host": "moros.local",
+            "port": 9090,
+            "health_check_url": "http://moros.local:9090/-/healthy",
+            "tags": ["monitoring", "metrics", "prometheus"]
+          },
+          {
+            "name": "grafana",
+            "host": "moros.local",
+            "port": 3001,
+            "health_check_url": "http://moros.local:3001/api/health",
+            "tags": ["monitoring", "visualization", "grafana"]
+          },
+          {
+            "name": "loki",
+            "host": "moros.local",
+            "port": 3100,
+            "health_check_url": "http://moros.local:3100/ready",
+            "tags": ["monitoring", "logs", "loki"]
+          },
+          {
+            "name": "alertmanager",
+            "host": "moros.local",
+            "port": 9093,
+            "health_check_url": "http://moros.local:9093/-/healthy",
+            "tags": ["monitoring", "alerts", "alertmanager"]
+          }
+        ]
+    depends_on:
+      - prometheus
+      - grafana
+      - loki
+      - alertmanager
+
+networks:
+  ai-network:
+    external: true
+  monitoring-network:
+    external: true
+
+volumes:
+  prometheus-data:
+    driver: local
+    driver_opts:
+      type: none
+      o: bind
+      device: ${DATA_DIR}/prometheus
+  grafana-data:
+    driver: local
+    driver_opts:
+      type: none
+      o: bind
+      device: ${DATA_DIR}/grafana
+  loki-data:
+    driver: local
+    driver_opts:
+      type: none
+      o: bind
+      device: ${DATA_DIR}/loki
+  alertmanager-data:
+    driver: local
+    driver_opts:
+      type: none
+      o: bind
+      device: ${DATA_DIR}/alertmanager
+  promtail-positions:
+    driver: local
+  tempo-data:
+    driver: local
+    driver_opts:
+      type: none
+      o: bind
+      device: ${DATA_DIR}/tempo
