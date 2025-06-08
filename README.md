@@ -15,6 +15,14 @@ A fully open-source, distributed AI platform combining Open-WebUI, LiteLLM, Olla
    cp .env.example .env
    # Edit .env with your settings
    nano .env
+   
+   # If your network doesn't use .local domains, set PLATFORM_DOMAIN
+   # For example: PLATFORM_DOMAIN=.lan or PLATFORM_DOMAIN=.home
+   ```
+
+3. **Process configuration templates** (required after changing PLATFORM_DOMAIN):
+   ```bash
+   ./scripts/process-templates.sh
    ```
 
 3. **Deploy on each machine**:
@@ -27,9 +35,11 @@ A fully open-source, distributed AI platform combining Open-WebUI, LiteLLM, Olla
    ```
 
 4. **Access the platform**:
-   - Open-WebUI: http://orpheus.local:3000
-   - LiteLLM API: http://orpheus.local:4000
-   - Grafana: http://moros.local:3001
+   - Open-WebUI: http://orpheus${PLATFORM_DOMAIN}:3000
+   - LiteLLM API: http://orpheus${PLATFORM_DOMAIN}:4000
+   - Grafana: http://moros${PLATFORM_DOMAIN}:3001
+   
+   Note: Replace ${PLATFORM_DOMAIN} with your configured domain (default: .local)
 
 ## 📋 Architecture Overview
 
@@ -121,7 +131,8 @@ A fully open-source, distributed AI platform combining Open-WebUI, LiteLLM, Olla
 
 ## 🚨 Important Notes
 
-1. **DNS Setup**: Ensure all machines can resolve `.local` domains via OPNsense
+1. **DNS Setup**: Ensure all machines can resolve your domain suffix (default: `.local`) via OPNsense
+   - If using a different domain, set `PLATFORM_DOMAIN` in your `.env` file
 2. **NFS Mounts**: Configure NFS shares before deploying GPU services
 3. **Secrets**: Never commit `.env` or `secrets/` directory
 4. **GPU Drivers**: Ensure NVIDIA/AMD drivers are installed on GPU nodes

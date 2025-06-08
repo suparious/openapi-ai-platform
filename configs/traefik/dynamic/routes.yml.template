@@ -1,0 +1,207 @@
+# Traefik Dynamic Configuration
+# Routes for AI Platform Services
+
+http:
+  routers:
+    # Open-WebUI
+    open-webui:
+      rule: "Host(`ai${PLATFORM_DOMAIN}`) || Host(`open-webui.ai${PLATFORM_DOMAIN}`)"
+      entryPoints:
+        - websecure
+      service: open-webui
+      tls:
+        certResolver: letsencrypt
+      middlewares:
+        - secure-headers
+        - rate-limit
+
+    # LiteLLM API
+    litellm:
+      rule: "Host(`api.ai${PLATFORM_DOMAIN}`) || Host(`litellm.ai${PLATFORM_DOMAIN}`)"
+      entryPoints:
+        - websecure
+      service: litellm
+      tls:
+        certResolver: letsencrypt
+      middlewares:
+        - secure-headers
+        - api-auth
+
+    # Grafana
+    grafana:
+      rule: "Host(`grafana.ai${PLATFORM_DOMAIN}`) || Host(`monitoring.ai${PLATFORM_DOMAIN}`)"
+      entryPoints:
+        - websecure
+      service: grafana
+      tls:
+        certResolver: letsencrypt
+      middlewares:
+        - secure-headers
+
+    # Prometheus
+    prometheus:
+      rule: "Host(`prometheus.ai${PLATFORM_DOMAIN}`)"
+      entryPoints:
+        - websecure
+      service: prometheus
+      tls:
+        certResolver: letsencrypt
+      middlewares:
+        - secure-headers
+        - basic-auth
+
+    # Service Registry
+    registry:
+      rule: "Host(`registry.ai${PLATFORM_DOMAIN}`)"
+      entryPoints:
+        - websecure
+      service: registry
+      tls:
+        certResolver: letsencrypt
+      middlewares:
+        - secure-headers
+        - api-auth
+
+    # Uptime Kuma
+    uptime:
+      rule: "Host(`uptime.ai${PLATFORM_DOMAIN}`) || Host(`status.ai${PLATFORM_DOMAIN}`)"
+      entryPoints:
+        - websecure
+      service: uptime
+      tls:
+        certResolver: letsencrypt
+      middlewares:
+        - secure-headers
+
+  services:
+    # Open-WebUI Service
+    open-webui:
+      loadBalancer:
+        servers:
+          - url: "http://orpheus${PLATFORM_DOMAIN}:3000"
+        healthCheck:
+          path: /health
+          interval: 30s
+          timeout: 10s
+
+    # LiteLLM Service
+    litellm:
+      loadBalancer:
+        servers:
+          - url: "http://orpheus${PLATFORM_DOMAIN}:4000"
+        healthCheck:
+          path: /health/liveliness
+          interval: 30s
+          timeout: 10s
+
+    # Grafana Service
+    grafana:
+      loadBalancer:
+        servers:
+          - url: "http://moros${PLATFORM_DOMAIN}:3001"
+        healthCheck:
+          path: /api/health
+          interval: 30s
+          timeout: 10s
+
+    # Prometheus Service
+    prometheus:
+      loadBalancer:
+        servers:
+          - url: "http://moros${PLATFORM_DOMAIN}:9090"
+        healthCheck:
+          path: /-/healthy
+          interval: 30s
+          timeout: 10s
+
+    # Service Registry
+    registry:
+      loadBalancer:
+        servers:
+          - url: "http://hephaestus${PLATFORM_DOMAIN}:8090"
+        healthCheck:
+          path: /health
+          interval: 30s
+          timeout: 10s
+
+    # Uptime Kuma
+    uptime:
+      loadBalancer:
+        servers:
+          - url: "http://hephaestus${PLATFORM_DOMAIN}:3001"
+        healthCheck:
+          path: /
+          interval: 30s
+          timeout: 10s
+
+  middlewares:
+    # Security Headers
+    secure-headers:
+      headers:
+        frameDeny: true
+        sslRedirect: true
+        browserXssFilter: true
+        contentTypeNosniff: true
+        forceSTSHeader: true
+        stsIncludeSubdomains: true
+        stsPreload: true
+        stsSeconds: 63072000
+        customFrameOptionsValue: "SAMEORIGIN"
+        customRequestHeaders:
+          X-Forwarded-Proto: https
+
+    # Rate Limiting
+    rate-limit:
+      rateLimit:
+        average: 100
+        period: 1m
+        burst: 50
+
+    # Basic Authentication
+    basic-auth:
+      basicAuth:
+        users:
+          - "admin:$2y$10$default"  # Replace with actual hash
+
+    # API Key Authentication
+    api-auth:
+      forwardAuth:
+        address: "http://hephaestus${PLATFORM_DOMAIN}:8090/auth/verify"
+        authResponseHeaders:
+          - X-User-ID
+          - X-Permissions
+
+    # CORS Headers
+    cors:
+      headers:
+        accessControlAllowMethods:
+          - GET
+          - OPTIONS
+          - PUT
+          - POST
+          - DELETE
+        accessControlAllowHeaders:
+          - "*"
+        accessControlAllowOriginList:
+          - "http://localhost:3000"
+          - "https://ai${PLATFORM_DOMAIN}"
+        accessControlMaxAge: 100
+        addVaryHeader: true
+
+# TLS Configuration
+tls:
+  options:
+    default:
+      minVersion: VersionTLS12
+      sniStrict: true
+      cipherSuites:
+        - TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256
+        - TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384
+        - TLS_ECDHE_RSA_WITH_CHACHA20_POLY1305
+        - TLS_AES_128_GCM_SHA256
+        - TLS_AES_256_GCM_SHA384
+        - TLS_CHACHA20_POLY1305_SHA256
+      curvePreferences:
+        - CurveP521
+        - CurveP384
+        - CurveP256

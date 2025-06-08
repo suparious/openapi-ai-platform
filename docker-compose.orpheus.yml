@@ -10,7 +10,7 @@ services:
     image: ghcr.io/open-webui/open-webui:main
     container_name: open-webui
     restart: unless-stopped
-    hostname: open-webui.orpheus.local
+    hostname: open-webui.orpheus${PLATFORM_DOMAIN:-.local}
     networks:
       - ai-network
     ports:
@@ -18,14 +18,14 @@ services:
     environment:
       # Basic Configuration
       WEBUI_NAME: ${WEBUI_NAME}
-      WEBUI_URL: http://orpheus.local:3000
+      WEBUI_URL: http://orpheus${PLATFORM_DOMAIN:-.local}:3000
       WEBUI_SECRET_KEY: ${OPENWEBUI_SECRET_KEY}
       
       # Database Configuration
-      DATABASE_URL: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@erebus.local:5432/openwebui
+      DATABASE_URL: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@${POSTGRES_HOST}:5432/openwebui
       
       # Redis Configuration
-      REDIS_URL: redis://default:${REDIS_PASSWORD}@erebus.local:6379/0
+      REDIS_URL: redis://default:${REDIS_PASSWORD}@${REDIS_HOST}:6379/0
       
       # Authentication
       WEBUI_AUTH: ${WEBUI_AUTH:-true}
@@ -38,7 +38,7 @@ services:
       
       # Vector Database
       VECTOR_DB: qdrant
-      QDRANT_URL: http://erebus.local:6333
+      QDRANT_URL: http://${POSTGRES_HOST}:6333
       QDRANT_API_KEY: ${QDRANT_API_KEY}
       
       # Features
@@ -85,7 +85,7 @@ services:
     image: ghcr.io/berriai/litellm:main-latest
     container_name: litellm
     restart: unless-stopped
-    hostname: litellm.orpheus.local
+    hostname: litellm.orpheus${PLATFORM_DOMAIN:-.local}
     networks:
       - ai-network
     ports:
@@ -147,7 +147,7 @@ services:
     image: ollama/ollama:latest
     container_name: ollama-orpheus
     restart: unless-stopped
-    hostname: ollama.orpheus.local
+    hostname: ollama.orpheus${PLATFORM_DOMAIN:-.local}
     networks:
       - ai-network
     ports:
@@ -213,7 +213,7 @@ services:
     image: ghcr.io/open-webui/pipelines:main
     container_name: pipelines
     restart: unless-stopped
-    hostname: pipelines.orpheus.local
+    hostname: pipelines.orpheus${PLATFORM_DOMAIN:-.local}
     networks:
       - ai-network
     ports:
@@ -251,7 +251,7 @@ services:
     image: prom/node-exporter:latest
     container_name: node-exporter-orpheus
     restart: unless-stopped
-    hostname: node-exporter.orpheus.local
+    hostname: node-exporter.orpheus${PLATFORM_DOMAIN:-.local}
     networks:
       - ai-network
       - monitoring-network

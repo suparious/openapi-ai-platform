@@ -301,6 +301,17 @@ build_images() {
     fi
 }
 
+# Process configuration templates
+process_config_templates() {
+    print_color $BLUE "Processing configuration templates..."
+    
+    if [ -x "${SCRIPT_DIR}/process-templates.sh" ]; then
+        "${SCRIPT_DIR}/process-templates.sh"
+    else
+        print_color $YELLOW "Warning: Template processor not found or not executable"
+    fi
+}
+
 # Deploy services
 deploy_services() {
     print_color $BLUE "Deploying services to ${MACHINE_NAME}..."
@@ -397,16 +408,16 @@ post_deployment_checks() {
             echo "  - Configure replication if using secondary database"
             ;;
         orpheus)
-            print_color $YELLOW "Open-WebUI available at: http://orpheus.local:3000"
-            print_color $YELLOW "LiteLLM API available at: http://orpheus.local:4000"
+            print_color $YELLOW "Open-WebUI available at: http://orpheus${PLATFORM_DOMAIN:-.local}:3000"
+            print_color $YELLOW "LiteLLM API available at: http://orpheus${PLATFORM_DOMAIN:-.local}:4000"
             ;;
         hephaestus)
             print_color $YELLOW "Traefik dashboard available at: http://traefik.${DOMAIN:-ai.local}"
             print_color $YELLOW "Uptime Kuma available at: http://uptime.${DOMAIN:-ai.local}"
             ;;
         moros)
-            print_color $YELLOW "Grafana available at: http://moros.local:3001"
-            print_color $YELLOW "Prometheus available at: http://moros.local:9090"
+            print_color $YELLOW "Grafana available at: http://moros${PLATFORM_DOMAIN:-.local}:3001"
+            print_color $YELLOW "Prometheus available at: http://moros${PLATFORM_DOMAIN:-.local}:9090"
             ;;
     esac
 }
@@ -427,6 +438,7 @@ main() {
         deploy)
             create_directories
             setup_networks
+            process_config_templates
             pull_images
             build_images
             deploy_services

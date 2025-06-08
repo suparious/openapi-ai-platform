@@ -10,7 +10,7 @@ services:
     image: ollama/ollama:rocm
     container_name: ollama-hades
     restart: unless-stopped
-    hostname: ollama.hades.local
+    hostname: ollama.hades${PLATFORM_DOMAIN:-.local}
     networks:
       - ai-network
     ports:
@@ -145,7 +145,7 @@ services:
     image: prom/node-exporter:latest
     container_name: node-exporter-hades
     restart: unless-stopped
-    hostname: node-exporter.hades.local
+    hostname: node-exporter.hades${PLATFORM_DOMAIN:-.local}
     networks:
       - ai-network
       - monitoring-network
@@ -180,7 +180,7 @@ services:
     image: netdata/netdata:latest
     container_name: netdata-hades
     restart: unless-stopped
-    hostname: netdata.hades.local
+    hostname: netdata.hades${PLATFORM_DOMAIN:-.local}
     networks:
       - ai-network
       - monitoring-network
